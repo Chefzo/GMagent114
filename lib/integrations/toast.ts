@@ -1,5 +1,3 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import https from 'node:https'
 
 type Json = Record<string, unknown>
@@ -38,26 +36,17 @@ function pickFirst(...values: Array<string | undefined | null>) {
   return null
 }
 
-function readJsonIfExists(filePath: string) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as Json
-  } catch {
-    return null
-  }
-}
-
-function resolveWorkspaceRoot() {
-  return path.resolve(process.cwd(), '..', '..')
-}
-
 function getToastConfig(): ToastConfig {
-  const workspaceRoot = resolveWorkspaceRoot()
-  const creds = readJsonIfExists(path.join(workspaceRoot, 'credentials', 'toast.json')) || {}
+  // Env vars only. Never hardcode credentials — every secret comes from Vercel
+  // env config (TOAST_CLIENT_ID, TOAST_CLIENT_SECRET, TOAST_RESTAURANT_GUID).
+  const clientId = pickFirst(process.env.TOAST_CLIENT_ID)
+  const clientSecret = pickFirst(process.env.TOAST_CLIENT_SECRET)
+  const restaurantGuid = pickFirst(process.env.TOAST_RESTAURANT_GUID)
 
   return {
-    clientId: pickFirst(process.env.TOAST_CLIENT_ID, creds.clientId as string, 'iNgBeklHBYAvDMg50Q6xm88JE95t7Jrk') || 'iNgBeklHBYAvDMg50Q6xm88JE95t7Jrk',
-    clientSecret: pickFirst(process.env.TOAST_CLIENT_SECRET, creds.clientSecret as string),
-    restaurantGuid: pickFirst(process.env.TOAST_RESTAURANT_GUID, creds.restaurantGuid as string, '091d922b-6d79-4c41-8ceb-b05fe20db847') || '091d922b-6d79-4c41-8ceb-b05fe20db847',
+    clientId: clientId ?? '',
+    clientSecret,
+    restaurantGuid: restaurantGuid ?? '',
   }
 }
 
@@ -222,20 +211,13 @@ function summarizeOrders(orders: Array<Record<string, unknown>>) {
   }
 }
 
-function readFallbackDailySnapshot() {
-  const workspaceRoot = resolveWorkspaceRoot()
-  return readJsonIfExists(path.join(workspaceRoot, 'data', 'toast-daily.json')) as DailySnapshot | null
+function readFallbackDailySnapshot(): DailySnapshot | null {
+  // No filesystem fallback in production. Live Toast pull is the only path.
+  return null
 }
 
 function readFallbackWeeklyLabor() {
-  const workspaceRoot = resolveWorkspaceRoot()
-  const weekly = readJsonIfExists(path.join(workspaceRoot, 'data', 'toast-weekly.json')) as {
-    totals?: { laborPct?: number; laborCost?: number }
-  } | null
-  return {
-    laborPct: weekly?.totals?.laborPct ?? null,
-    laborCost: weekly?.totals?.laborCost ?? null,
-  }
+  return { laborPct: null as number | null, laborCost: null as number | null }
 }
 
 function getPreviousBusinessDateISO() {
