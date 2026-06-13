@@ -1,0 +1,30 @@
+:root {
+  --bg: #0f0d0c;
+  --panel: #171412;
+  --panel-2: #211b17;
+  --line: rgba(255,255,255,0.08);
+  --text: #f3eadf;
+  --muted: #a89a8c;
+  --gold: #c8a96e;
+  --red: #b15039;
+  --green: #547b5e;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: Arial, Helvetica, sans-serif; }
+a { color: inherit; }
+main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 56px; }
+.hero { display: grid; gap: 14px; margin-bottom: 28px; }
+.kicker { color: var(--gold); font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; }
+.title { font-size: 52px; line-height: 0.95; margin: 0; }
+.copy { font-size: 15px; line-height: 1.65; color: var(--muted); max-width: 820px; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.card { background: linear-gradient(180deg, var(--panel), var(--panel-2)); border: 1px solid var(--line); border-radius: 18px; padding: 18px; }
+.card h2 { margin: 0 0 10px; font-size: 20px; }
+.card p, .card li { color: var(--muted); font-size: 14px; line-height: 1.55; }
+.card code { color: var(--gold); }
+.status { display: inline-block; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; }
+.ok { color: #9bc4a4; border-color: rgba(84,123,94,.45); background: rgba(84,123,94,.12); }
+.warn { color: #e8c78a; border-color: rgba(200,169,110,.45); background: rgba(200,169,110,.12); }
+.list { margin: 0; padding-left: 18px; }
+.footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .title { font-size: 38px; } }
