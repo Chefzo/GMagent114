@@ -1,1 +1,110 @@
-# GMagent114
+# GM Agent for "114"
+
+An autonomous **General Manager agent** for the bar *114*. It does the recurring
+admin work a human GM would — starting with **ordering** (liquor, beer, wine, and
+GFS food) — so you can run on bartenders alone and focus elsewhere.
+
+It runs **mostly automatically and pings you only for decisions**: on each order
+morning it checks what sold (Toast), updates back-bar counts, builds the reorder
+lists, and emails you the proposed orders. Nothing is purchased until you reply
+**APPROVE**.
+
+---
+
+## What it does today (v1)
+
+**Ordering, end to end:**
+1. Pulls sales/depletion from **Toast POS** (direct API) since the last order.
+2. Updates the **Inventory** in your Google Sheet.
+3. Builds a reorder list per vendor — orders items at/below their reorder point
+   up to par, rounded to whole cases/packs.
+4. Emails you **one approval summary** with the math and an estimated total.
+5. On your reply (`APPROVE ALL` / `APPROVE GFS` / `SKIP`), sends the vendor
+   orders (GFS also gets an order-guide CSV) and logs them to OrderHistory.
+
+**Designed and stubbed, built next:** inventory counting, Sling scheduling,
+events, and a weekly GM report. See `src/modules/`.
+
+### How the integrations actually connect
+| System | How | Notes |
+|---|---|---|
+| Toast POS | Direct API | Request "Standard API Access" from your Toast rep (longest lead time). |
+| Sling | Direct API | Admin API token — quick. Used by the scheduling module. |
+| GFS / liquor | Email + order-guide CSV | No single-store order API exists, so orders are auto-drafted and sent on your approval (this is also the money-safety gate). |
+| Google Sheets / Gmail | Direct API | Data backbone + approval/order emails. |
+
+---
+
+## Try it right now (no credentials needed)
+
+```bash
+npm install
+npm run ordering -- --dry-run   # runs against sample data, sends no email
+npm test                        # unit + end-to-end tests
+```
+
+The dry-run prints the exact approval email you'd receive on an order morning.
+
+---
+
+## Going live — setup checklist
+
+1. **Build the Google Sheet.** Create one spreadsheet with the tabs/columns in
+   [`config/sheets.schema.md`](config/sheets.schema.md) and fill in your par
+   levels, current counts, vendors, and catalog SKUs.
+2. **Get credentials** (copy `.env.example` to `.env` and fill in):
+   - **Anthropic API key** (for the chat agent).
+   - **Toast**: ask your Toast rep to enable *Standard API Access* → client ID,
+     secret, restaurant GUID. *(Start this first — it can take days/weeks.)*
+   - **Sling**: an admin API token (for scheduling, built next).
+   - **Google service account**: create one, download its JSON key, and share
+     the spreadsheet with the service-account email. For sending email, enable
+     domain-wide delegation and set `GOOGLE_IMPERSONATE_USER` to your bar's
+     Google account.
+   - `OWNER_EMAIL`, `GM_SPREADSHEET_ID`.
+3. **Verify read-only** before enabling sends:
+   ```bash
+   npm run ordering -- --dry-run         # math + draft email, still no sends
+   ```
+   Then a real run (`npm run ordering`) emails *you* the approval — no vendor
+   email goes out until you approve.
+4. **Schedule it.** Add each `.env` value as a **GitHub repo secret**
+   (Settings → Secrets and variables → Actions), then the
+   [`ordering`](.github/workflows/ordering.yml) workflow runs on your order
+   days. Use the Actions tab's **Run workflow** button (with *dry run* checked)
+   to test the scheduler first.
+
+> If Toast access is still pending, the ordering math will run off your manual
+> Inventory counts until Toast comes online — nothing is blocked.
+
+---
+
+## Chat with the agent
+
+```bash
+npm run chat                 # live (needs ANTHROPIC_API_KEY + Google/Toast)
+npm run chat -- --dry-run    # against sample data
+```
+Ask things like *"what would the order look like this week?"* or *"what's below
+par?"*.
+
+---
+
+## Project layout
+
+```
+src/
+  agent/     persona.ts (system prompt), chat.ts (talk to it)
+  tools/     toast, sling, googleSheets, gmail, gfs clients + mock fixtures
+  modules/   ordering (v1) + inventory/scheduling/events/reporting (next)
+  jobs/      runOrdering.ts — the scheduled entrypoint
+  lib/       auth, config, approval, types, logger
+config/      sheets.schema.md — the Google Sheets layout
+.github/workflows/ordering.yml — the scheduler
+test/        fixtures + tests
+```
+
+## Safety notes
+- **Nothing is ordered without your explicit `APPROVE` reply.**
+- Secrets live only in `.env` (gitignored) or GitHub repo secrets — never committed.
+- `--dry-run` touches no network and sends no email.

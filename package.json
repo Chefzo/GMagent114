@@ -1,0 +1,23 @@
+{
+  "name": "gm-agent-114",
+  "version": "0.1.0",
+  "description": "Autonomous GM Agent for the bar '114' — automates ordering, inventory, scheduling, events, and reporting.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "ordering": "tsx src/jobs/runOrdering.ts",
+    "chat": "tsx src/agent/chat.ts",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
