@@ -5,6 +5,7 @@
 import type {
   BarConfig,
   CatalogEntry,
+  CountEntry,
   Depletion,
   InventoryItem,
   ParLevel,
@@ -17,6 +18,8 @@ export interface DataBackbone {
   getCatalog(): Promise<CatalogEntry[]>;
   /** Apply depletion to on-hand counts and persist. */
   applyDepletion(depletion: Depletion[]): Promise<void>;
+  /** Overwrite on-hand for physically counted items (upsert), stamping lastCounted=today. */
+  applyCounts(counts: CountEntry[]): Promise<void>;
   /** Append a sent order to OrderHistory. */
   recordOrder(vendorKey: string, lines: { item: string; packs: number }[], estTotal: number): Promise<void>;
 }

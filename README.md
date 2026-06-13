@@ -22,8 +22,16 @@ lists, and emails you the proposed orders. Nothing is purchased until you reply
 5. On your reply (`APPROVE ALL` / `APPROVE GFS` / `SKIP`), sends the vendor
    orders (GFS also gets an order-guide CSV) and logs them to OrderHistory.
 
-**Designed and stubbed, built next:** inventory counting, Sling scheduling,
-events, and a weekly GM report. See `src/modules/`.
+**Inventory counting (built):**
+- A scheduled **count reminder** emails staff a category-ordered checklist
+  ([`inventory-reminder`](.github/workflows/inventory-reminder.yml) workflow).
+- Staff reply with the numbers; the chat agent's `record_count` tool writes them
+  to the Inventory tab (counts become the source of truth) and reports
+  **variance** vs. the theoretical on-hand sales implied — flagging likely
+  over-pours/shrinkage (SHORT) or unlogged receipts (OVER).
+
+**Designed and stubbed, built next:** Sling scheduling, events, and a weekly GM
+report. See `src/modules/`.
 
 ### How the integrations actually connect
 | System | How | Notes |
@@ -96,11 +104,11 @@ par?"*.
 src/
   agent/     persona.ts (system prompt), chat.ts (talk to it)
   tools/     toast, sling, googleSheets, gmail, gfs clients + mock fixtures
-  modules/   ordering (v1) + inventory/scheduling/events/reporting (next)
-  jobs/      runOrdering.ts — the scheduled entrypoint
+  modules/   ordering + inventory (built); scheduling/events/reporting (next)
+  jobs/      runOrdering.ts, runInventoryReminder.ts, checkToast.ts
   lib/       auth, config, approval, types, logger
 config/      sheets.schema.md — the Google Sheets layout
-.github/workflows/ordering.yml — the scheduler
+.github/workflows/  ordering.yml, inventory-reminder.yml — the schedulers
 test/        fixtures + tests
 ```
 

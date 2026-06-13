@@ -26,6 +26,14 @@ export interface InventoryItem {
   location: string; // "back bar" | "storage" | ...
 }
 
+/** A physical count entered during an inventory count (writes to the Inventory tab). */
+export interface CountEntry {
+  item: string;
+  onHand: number;
+  /** Optional; if omitted the item's existing location is kept. */
+  location?: string;
+}
+
 /** A row of the VendorCatalog tab: how an item is ordered from a vendor. */
 export interface CatalogEntry {
   vendor: string;

@@ -9,6 +9,7 @@ import type {
   BarConfig,
   CatalogEntry,
   Category,
+  CountEntry,
   Depletion,
   InventoryItem,
   ParLevel,
@@ -111,19 +112,12 @@ export class GoogleSheetsBackbone implements DataBackbone {
     }));
   }
 
-  async applyDepletion(depletion: Depletion[]): Promise<void> {
-    // Read current inventory, subtract depletion, write the whole tab back.
+  /** Overwrite the whole Inventory tab from a list of rows. */
+  private async writeInventory(items: InventoryItem[]): Promise<void> {
     const token = await this.token();
-    const current = await this.getInventory();
-    const used = new Map(depletion.map((d) => [d.item, d.unitsUsed]));
-    const today = new Date().toISOString().slice(0, 10);
     const header = ["item", "onHand", "lastCounted", "location"];
     const values: (string | number)[][] = [header];
-    for (const inv of current) {
-      const newOnHand = Math.max(0, inv.onHand - (used.get(inv.item) ?? 0));
-      const counted = used.has(inv.item) ? today : inv.lastCounted;
-      values.push([inv.item, newOnHand, counted, inv.location]);
-    }
+    for (const inv of items) values.push([inv.item, inv.onHand, inv.lastCounted, inv.location]);
     const url =
       `${API}/${this.id}/values/${encodeURIComponent("Inventory")}` +
       `?valueInputOption=USER_ENTERED`;
@@ -133,7 +127,39 @@ export class GoogleSheetsBackbone implements DataBackbone {
       body: JSON.stringify({ values }),
     });
     if (!res.ok) throw new Error(`Sheets write Inventory failed: ${res.status} ${await res.text()}`);
+  }
+
+  async applyDepletion(depletion: Depletion[]): Promise<void> {
+    // Read current inventory, subtract depletion, write the whole tab back.
+    const current = await this.getInventory();
+    const used = new Map(depletion.map((d) => [d.item, d.unitsUsed]));
+    const today = new Date().toISOString().slice(0, 10);
+    const next = current.map((inv) => ({
+      ...inv,
+      onHand: Math.max(0, inv.onHand - (used.get(inv.item) ?? 0)),
+      lastCounted: used.has(inv.item) ? today : inv.lastCounted,
+    }));
+    await this.writeInventory(next);
     log.info(`Applied depletion to ${depletion.length} item(s) in Inventory`);
+  }
+
+  async applyCounts(counts: CountEntry[]): Promise<void> {
+    // Physical counts are the source of truth: upsert each counted item's
+    // on-hand and stamp today's date; preserve existing location unless given.
+    const current = await this.getInventory();
+    const today = new Date().toISOString().slice(0, 10);
+    const byItem = new Map(current.map((i) => [i.item, { ...i }]));
+    for (const c of counts) {
+      const existing = byItem.get(c.item);
+      byItem.set(c.item, {
+        item: c.item,
+        onHand: c.onHand,
+        lastCounted: today,
+        location: c.location ?? existing?.location ?? "",
+      });
+    }
+    await this.writeInventory([...byItem.values()]);
+    log.info(`Applied physical counts to ${counts.length} item(s) in Inventory`);
   }
 
   async recordOrder(

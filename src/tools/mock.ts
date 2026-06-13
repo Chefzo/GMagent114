@@ -3,7 +3,7 @@
 // emails are logged, so the full ordering flow can be exercised safely.
 
 import { log } from "../lib/logger.ts";
-import type { BarConfig, CatalogEntry, Depletion, InventoryItem, ParLevel } from "../lib/types.ts";
+import type { BarConfig, CatalogEntry, CountEntry, Depletion, InventoryItem, ParLevel } from "../lib/types.ts";
 import type { Attachment, DataBackbone, Mailer, SalesSource, Toolbox } from "./clients.ts";
 import {
   fixtureCatalog,
@@ -35,6 +35,20 @@ export class MockBackbone implements DataBackbone {
       inv.onHand = Math.max(0, inv.onHand - (used.get(inv.item) ?? 0));
     }
     log.info(`[dry-run] applied depletion to ${depletion.length} item(s)`);
+  }
+  async applyCounts(counts: CountEntry[]): Promise<void> {
+    const today = new Date().toISOString().slice(0, 10);
+    for (const c of counts) {
+      const existing = this.inventory.find((i) => i.item === c.item);
+      if (existing) {
+        existing.onHand = c.onHand;
+        existing.lastCounted = today;
+        if (c.location) existing.location = c.location;
+      } else {
+        this.inventory.push({ item: c.item, onHand: c.onHand, lastCounted: today, location: c.location ?? "" });
+      }
+    }
+    log.info(`[dry-run] applied physical counts to ${counts.length} item(s)`);
   }
   async recordOrder(vendorKey: string, lines: { item: string; packs: number }[], estTotal: number): Promise<void> {
     this.orders.push({ vendorKey, lines, estTotal });
