@@ -1,0 +1,29 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/gm/shift-digest",
+      "schedule": "10 7 * * *"
+    },
+    {
+      "path": "/api/gm/pre-shift",
+      "schedule": "0 21 * * *"
+    },
+    {
+      "path": "/api/gm/deposit-recon",
+      "schedule": "30 12 * * *"
+    },
+    {
+      "path": "/api/gm/permits",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/gm/event-lifecycle",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/gm/pnl-snapshot",
+      "schedule": "0 23 * * 0"
+    }
+  ]
+}
