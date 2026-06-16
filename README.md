@@ -37,27 +37,29 @@ Pipeline:
 
 ### 2. Add env vars in Vercel
 
-Settings → Environment Variables. Add every row below, mark each as **Secret**, scope to **Production** + **Preview**.
+Settings → Environment Variables. Add every row below, mark each as **Secret**, scope to **Production** + **Preview**. **Never commit real values to git** — use Vercel's env UI only. See `.env.example` for the full list of variable names.
 
-| Variable | Value | Notes |
+| Variable | Where to get it | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `sk-ant-...` | From console.anthropic.com |
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Optional override |
-| `TOAST_CLIENT_ID` | (from Toast Developer Portal) | |
-| `TOAST_CLIENT_SECRET` | (rotated value) | |
-| `TOAST_RESTAURANT_GUID` | `091d922b-6d79-4c41-8ceb-b05fe20db847` | |
-| `SUPABASE_URL` | `https://paxwebfhozillhrdmemv.supabase.co` | |
-| `SUPABASE_SERVICE_ROLE_KEY` | (from Supabase → Settings → API → service_role) | |
-| `TWILIO_ACCOUNT_SID` | `AC...` | |
-| `TWILIO_AUTH_TOKEN` | (Twilio Auth Token, NEVER paste in chat) | |
-| `TWILIO_FROM_NUMBER` | `+15023341588` | The 502 number you bought |
-| `TWILIO_MESSAGING_SERVICE_SID` | `MG...` | After A2P 10DLC approval |
-| `SLACK_BOT_TOKEN` | `xoxb-...` | |
-| `SLACK_OPS_CHANNEL` | `#one-fourteen-ops` | |
-| `OWNER_PHONE` | `+15025550114` | E.164 format, your cell |
-| `CRON_SECRET` | (generate a random string, 32+ chars) | Locks the API routes to Vercel Cron only |
+| `ANTHROPIC_API_KEY` | console.anthropic.com | `sk-ant-...` |
+| `CLAUDE_MODEL` | optional override | default `claude-sonnet-4-6` |
+| `TOAST_CLIENT_ID` | Toast Developer Portal | |
+| `TOAST_CLIENT_SECRET` | Toast Developer Portal | rotate any value that ever touched chat/git |
+| `TOAST_RESTAURANT_GUID` | Toast Web → Settings → Restaurant Info | UUID format |
+| `SUPABASE_URL` | Supabase → Settings → API | `https://<ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → service_role | never expose client-side |
+| `TWILIO_ACCOUNT_SID` | Twilio Console | `AC...` |
+| `TWILIO_AUTH_TOKEN` | Twilio Console | rotate after any chat/git exposure |
+| `TWILIO_FROM_NUMBER` | Twilio purchased number | E.164 format |
+| `TWILIO_MESSAGING_SERVICE_SID` | Twilio Messaging Service | `MG...`, after A2P 10DLC approval |
+| `SLACK_BOT_TOKEN` | Slack App → OAuth & Permissions | `xoxb-...` |
+| `SLACK_OPS_CHANNEL` | Slack channel name | default `#one-fourteen-ops` |
+| `OWNER_PHONE` | Enzo's cell | E.164 format |
+| `CRON_SECRET` | generated locally | 32+ char random string |
 
-A quick way to generate `CRON_SECRET` on Mac: `openssl rand -hex 24`. Paste that string.
+Generate `CRON_SECRET` locally: `openssl rand -hex 24`.
+
+> **Secret hygiene:** if any production secret has ever appeared in a README, README diff, commit message, chat transcript, screenshot, or screen recording — rotate it. Cheap. Five minutes. Do it now.
 
 ### 3. Apply the Supabase schema
 
@@ -104,11 +106,17 @@ Every digest is gated through `assertVoiceRules()`:
 
 - One paragraph (no blank lines)
 - No exclamation points
-- No throat-clearing openers ("Last night was…")
+- No throat-clearing openers ("Last night was…", "Yesterday we…")
+- No cheesy hospitality language ("crushed it", "guests had a wonderful time", "rockstars", "team killed it")
+- No emojis
+- No markdown formatting
 - ≤ 7 sentences
 - ≤ 1200 chars
+- Must contain a net sales reference (so the digest is never just vibes)
 
 Bad output is replaced with the deterministic mock fallback so a model hallucination never reaches Enzo's phone.
+
+Voice rules are unit-tested. CI runs `npm test` on every push and PR — see `.github/workflows/voice-rules.yml`. Tighten a rule, add a test case, ship.
 
 ## Approval queue, escalation, and money safety
 
