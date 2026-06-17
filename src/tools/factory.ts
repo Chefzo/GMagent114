@@ -4,9 +4,11 @@
 import { GoogleSheetsBackbone } from "./googleSheets.ts";
 import { ToastSalesSource } from "./toast.ts";
 import { GmailMailer } from "./gmail.ts";
+import { AgentMailMailer } from "./agentMail.ts";
 import { SlingClient } from "./sling.ts";
 import { GoogleCalendarSource } from "./googleCalendar.ts";
-import type { ScheduleSource, Toolbox } from "./clients.ts";
+import { env } from "../lib/config.ts";
+import type { Mailer, ScheduleSource, Toolbox } from "./clients.ts";
 import type { Shift } from "../lib/types.ts";
 
 /**
@@ -34,13 +36,18 @@ class SlingScheduleSource implements ScheduleSource {
   }
 }
 
+/** AgentMail when its key is set (the 114 default); otherwise Gmail. */
+function chooseMailer(): Mailer {
+  return env("AGENTMAIL_API_KEY") ? new AgentMailMailer() : new GmailMailer();
+}
+
 export function liveToolbox(): Toolbox {
   return {
     data: new GoogleSheetsBackbone(),
     sales: new ToastSalesSource(),
     schedule: new SlingScheduleSource(),
     calendar: new GoogleCalendarSource(),
-    mailer: new GmailMailer(),
+    mailer: chooseMailer(),
     dryRun: false,
   };
 }

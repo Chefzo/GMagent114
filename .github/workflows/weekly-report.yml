@@ -37,6 +37,8 @@ jobs:
           GOOGLE_IMPERSONATE_USER: ${{ secrets.GOOGLE_IMPERSONATE_USER }}
           GM_SPREADSHEET_ID: ${{ secrets.GM_SPREADSHEET_ID }}
           OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+          AGENTMAIL_API_KEY: ${{ secrets.AGENTMAIL_API_KEY }}
+          AGENTMAIL_INBOX: ${{ secrets.AGENTMAIL_INBOX }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             npm run report:weekly -- --dry-run
