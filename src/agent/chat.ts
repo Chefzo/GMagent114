@@ -21,6 +21,11 @@ import {
   computeOvertimeRisk,
   summarizeGaps,
 } from "../modules/scheduling.ts";
+import {
+  buildWeeklyReportEmail,
+  computeWeeklyMetrics,
+  rankMovers,
+} from "../modules/reporting.ts";
 import type { Toolbox } from "../tools/clients.ts";
 import type { CountEntry } from "../lib/types.ts";
 
@@ -56,6 +61,27 @@ async function toolRecordCount(tb: Toolbox, input: unknown): Promise<string> {
   if (counts.length === 0) return `No valid counts provided. Expected {"counts":[{"item","onHand"}]}.`;
   const review = await runVarianceReview(tb, counts);
   return JSON.stringify({ recorded: counts.length, flagged: review.flagged, report: review.email }, null, 2);
+}
+
+async function toolWeeklyReport(tb: Toolbox): Promise<string> {
+  // Read-only: compute the last 7 days' metrics + digest. Does not send email.
+  const now = new Date();
+  const sinceIso = new Date(now.getTime() - 7 * 86_400_000).toISOString();
+  const priorIso = new Date(now.getTime() - 14 * 86_400_000).toISOString();
+  const config = await tb.data.getConfig();
+  const [sales, priorSales, shifts, sched, orders, depletion] = await Promise.all([
+    tb.sales.getRevenueSince(sinceIso, now.toISOString()),
+    tb.sales.getRevenueSince(priorIso, sinceIso),
+    tb.schedule.getShifts(sinceIso, now.toISOString()),
+    tb.data.getSchedulingConfig(),
+    tb.data.getOrderHistory(sinceIso),
+    tb.sales.getDepletionSince(sinceIso),
+  ]);
+  const laborCost = computeLaborProjection(shifts, sched).totalCost;
+  const costOfGoods = orders.reduce((s, o) => s + o.estTotal, 0);
+  const metrics = computeWeeklyMetrics({ sales, priorSales, laborCost, costOfGoods });
+  const email = buildWeeklyReportEmail(config.barName, metrics, rankMovers(depletion), orders);
+  return JSON.stringify({ metrics, digest: email }, null, 2);
 }
 
 async function toolReviewSchedule(tb: Toolbox): Promise<string> {
@@ -121,6 +147,12 @@ const TOOLS = [
       "Review the next 7 days of published shifts for coverage gaps, overtime risk, and projected labor cost.",
     input_schema: { type: "object" as const, properties: {}, required: [] },
   },
+  {
+    name: "weekly_report",
+    description:
+      "Compute the weekly GM digest: sales vs last week, labor %, pour cost, top/slow movers, and what was ordered.",
+    input_schema: { type: "object" as const, properties: {}, required: [] },
+  },
 ];
 
 async function runTool(name: string, input: unknown, tb: Toolbox): Promise<string> {
@@ -135,6 +167,8 @@ async function runTool(name: string, input: unknown, tb: Toolbox): Promise<strin
       return toolRecordCount(tb, input);
     case "review_schedule":
       return toolReviewSchedule(tb);
+    case "weekly_report":
+      return toolWeeklyReport(tb);
     default:
       return `Unknown tool: ${name}`;
   }

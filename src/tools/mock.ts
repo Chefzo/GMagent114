@@ -9,6 +9,7 @@ import type {
   CountEntry,
   Depletion,
   InventoryItem,
+  OrderRecord,
   ParLevel,
   SchedulingConfig,
   Shift,
@@ -19,7 +20,9 @@ import {
   fixtureConfig,
   fixtureDepletion,
   fixtureInventory,
+  fixtureOrderHistory,
   fixtureParLevels,
+  fixtureSales,
   fixtureScheduling,
   fixtureShifts,
 } from "../../test/fixtures.ts";
@@ -42,6 +45,17 @@ export class MockBackbone implements DataBackbone {
   }
   async getSchedulingConfig(): Promise<SchedulingConfig> {
     return { ...fixtureScheduling, coverageRules: fixtureScheduling.coverageRules.map((r) => ({ ...r })) };
+  }
+  async getOrderHistory(_sinceIso: string): Promise<OrderRecord[]> {
+    // Fixtures represent this week's orders; include anything recorded this run.
+    const recorded = this.orders.map((o) => ({
+      timestamp: new Date().toISOString(),
+      vendor: o.vendorKey,
+      items: o.lines.map((l) => `${l.item} x${l.packs}`).join("; "),
+      estTotal: o.estTotal,
+      status: "sent",
+    }));
+    return [...fixtureOrderHistory.map((o) => ({ ...o })), ...recorded];
   }
   async applyDepletion(depletion: Depletion[]): Promise<void> {
     const used = new Map(depletion.map((d) => [d.item, d.unitsUsed]));
@@ -73,6 +87,11 @@ export class MockBackbone implements DataBackbone {
 export class MockSales implements SalesSource {
   async getDepletionSince(_sinceIso: string): Promise<Depletion[]> {
     return fixtureDepletion.map((d) => ({ ...d }));
+  }
+  async getRevenueSince(_fromIso: string, toIso: string): Promise<number> {
+    // Recent window => this week's sales; older window => prior week's (demo delta).
+    const ageDays = (Date.now() - new Date(toIso).getTime()) / 86_400_000;
+    return ageDays < 4 ? fixtureSales.thisWeek : fixtureSales.priorWeek;
   }
 }
 

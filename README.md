@@ -38,8 +38,14 @@ lists, and emails you the proposed orders. Nothing is purchased until you reply
   budget. Read-only — drafting/pushing a schedule back to Sling stays
   approval-gated.
 
-**Designed and stubbed, built next:** events and a weekly GM report. See
-`src/modules/`.
+**Weekly GM report (built):**
+- A Monday-morning job emails the owner the week's digest
+  ([`weekly-report`](.github/workflows/weekly-report.yml) workflow): **sales vs
+  last week**, **labor %**, **pour cost %**, **top/slow movers**, and **what was
+  ordered** — synthesized from Toast, the week's shifts, and OrderHistory.
+
+**Designed and stubbed, built next:** events (booking holds + prep checklists).
+See `src/modules/`.
 
 ### How the integrations actually connect
 | System | How | Notes |
@@ -113,11 +119,11 @@ par?"*.
 src/
   agent/     persona.ts (system prompt), chat.ts (talk to it)
   tools/     toast, sling, googleSheets, gmail, gfs clients + mock fixtures
-  modules/   ordering + inventory + scheduling (built); events/reporting (next)
-  jobs/      runOrdering.ts, runInventoryReminder.ts, runScheduleReview.ts, checkToast.ts
+  modules/   ordering + inventory + scheduling + reporting (built); events (next)
+  jobs/      runOrdering, runInventoryReminder, runScheduleReview, runWeeklyReport, checkToast
   lib/       auth, config, approval, types, logger
 config/      sheets.schema.md — the Google Sheets layout
-.github/workflows/  ordering, inventory-reminder, schedule-review — the schedulers
+.github/workflows/  ordering, inventory-reminder, schedule-review, weekly-report
 test/        fixtures + tests
 ```
 

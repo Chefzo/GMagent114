@@ -13,6 +13,7 @@ import type {
   CoverageRule,
   Depletion,
   InventoryItem,
+  OrderRecord,
   ParLevel,
   SchedulingConfig,
   Vendor,
@@ -154,6 +155,19 @@ export class GoogleSheetsBackbone implements DataBackbone {
       wageByBartender,
       weeklyLaborBudget: budget,
     };
+  }
+
+  async getOrderHistory(sinceIso: string): Promise<OrderRecord[]> {
+    const rows = await this.readTab("OrderHistory");
+    return rows
+      .map((r) => ({
+        timestamp: r.timestamp ?? "",
+        vendor: r.vendor ?? "",
+        items: r.items ?? "",
+        estTotal: Number(r.estTotal ?? 0),
+        status: r.status ?? "",
+      }))
+      .filter((o) => o.timestamp >= sinceIso); // ISO strings sort lexicographically
   }
 
   /** Overwrite the whole Inventory tab from a list of rows. */

@@ -7,6 +7,7 @@ import type {
   CatalogEntry,
   Depletion,
   InventoryItem,
+  OrderRecord,
   ParLevel,
   SchedulingConfig,
   Shift,
@@ -75,6 +76,16 @@ export const fixtureShifts: Shift[] = [
   { bartender: "Jordan", day: 6, startHour: 18, endHour: 24 }, // Sat 6h
   { bartender: "Jordan", day: 0, startHour: 14, endHour: 20 }, // Sun 6h
 ];
+
+// Orders the agent "sent" this week (used by the weekly report).
+export const fixtureOrderHistory: OrderRecord[] = [
+  { timestamp: "2026-06-15T13:05:00Z", vendor: "breakthru", items: "Tito's x2; Jameson x1", estTotal: 376.0, status: "sent" },
+  { timestamp: "2026-06-15T13:05:00Z", vendor: "localbeer", items: "Bud Light x7", estTotal: 171.5, status: "sent" },
+  { timestamp: "2026-06-15T13:05:00Z", vendor: "gfs", items: "Lime x1", estTotal: 28.0, status: "sent" },
+];
+
+// Weekly net sales (revenue $). thisWeek is up ~9% on priorWeek for the demo.
+export const fixtureSales = { thisWeek: 24800, priorWeek: 22750 };
 
 export const fixtureScheduling: SchedulingConfig = {
   // Need 2 bartenders Thu/Fri/Sat evenings (18:00–24:00).

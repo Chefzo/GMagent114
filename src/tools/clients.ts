@@ -8,6 +8,7 @@ import type {
   CountEntry,
   Depletion,
   InventoryItem,
+  OrderRecord,
   ParLevel,
   SchedulingConfig,
   Shift,
@@ -19,6 +20,8 @@ export interface DataBackbone {
   getInventory(): Promise<InventoryItem[]>;
   getCatalog(): Promise<CatalogEntry[]>;
   getSchedulingConfig(): Promise<SchedulingConfig>;
+  /** Orders sent on/after `sinceIso` (newest filtering done by the backbone). */
+  getOrderHistory(sinceIso: string): Promise<OrderRecord[]>;
   /** Apply depletion to on-hand counts and persist. */
   applyDepletion(depletion: Depletion[]): Promise<void>;
   /** Overwrite on-hand for physically counted items (upsert), stamping lastCounted=today. */
@@ -30,6 +33,8 @@ export interface DataBackbone {
 export interface SalesSource {
   /** Units consumed since `sinceIso`, already converted to ParLevel units. */
   getDepletionSince(sinceIso: string): Promise<Depletion[]>;
+  /** Net sales (revenue $) over [fromIso, toIso]. */
+  getRevenueSince(fromIso: string, toIso: string): Promise<number>;
 }
 
 export interface ScheduleSource {

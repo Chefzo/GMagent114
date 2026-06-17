@@ -1,0 +1,45 @@
+name: GM Agent — Weekly Report
+
+# Emails the owner the weekly GM digest (sales vs last week, labor %, pour cost,
+# top/slow movers, what was ordered). Read-only.
+# Cron is UTC; the example is 14:00 UTC Monday (~9–10am US Eastern). Adjust to
+# your week-start/timezone.
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run with fixtures only (no live APIs, no emails)"
+        type: boolean
+        default: false
+
+jobs:
+  weekly-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Run weekly report
+        env:
+          TOAST_CLIENT_ID: ${{ secrets.TOAST_CLIENT_ID }}
+          TOAST_CLIENT_SECRET: ${{ secrets.TOAST_CLIENT_SECRET }}
+          TOAST_RESTAURANT_GUID: ${{ secrets.TOAST_RESTAURANT_GUID }}
+          TOAST_BASE_URL: ${{ secrets.TOAST_BASE_URL }}
+          SLING_API_TOKEN: ${{ secrets.SLING_API_TOKEN }}
+          SLING_EMAIL: ${{ secrets.SLING_EMAIL }}
+          SLING_PASSWORD: ${{ secrets.SLING_PASSWORD }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_IMPERSONATE_USER: ${{ secrets.GOOGLE_IMPERSONATE_USER }}
+          GM_SPREADSHEET_ID: ${{ secrets.GM_SPREADSHEET_ID }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            npm run report:weekly -- --dry-run
+          else
+            npm run report:weekly
+          fi

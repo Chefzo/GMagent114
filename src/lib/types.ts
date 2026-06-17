@@ -80,6 +80,15 @@ export interface Depletion {
   unitsUsed: number;
 }
 
+/** A row of the OrderHistory tab: one order the agent sent. */
+export interface OrderRecord {
+  timestamp: string; // ISO
+  vendor: string;
+  items: string; // "Tito's x2; Jameson x1"
+  estTotal: number;
+  status: string; // "sent" | ...
+}
+
 export interface BarConfig {
   barName: string;
   ownerEmail: string;
