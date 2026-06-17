@@ -44,8 +44,15 @@ lists, and emails you the proposed orders. Nothing is purchased until you reply
   last week**, **labor %**, **pour cost %**, **top/slow movers**, and **what was
   ordered** — synthesized from Toast, the week's shifts, and OrderHistory.
 
-**Designed and stubbed, built next:** events (booking holds + prep checklists).
-See `src/modules/`.
+**Events (built):**
+- A daily job reads upcoming bookings from **Google Calendar** (the source of
+  truth for events) and emails the owner a **prep checklist** per booking —
+  staffing (≈1 bartender / 50 guests) and stock prep scaled to headcount
+  ([`event-reminders`](.github/workflows/event-reminders.yml) workflow).
+  Headcount/contact are parsed from each event's description
+  (`headcount: 80`, `contact: …`).
+
+All five modules are built. See `src/modules/`.
 
 ### How the integrations actually connect
 | System | How | Notes |
@@ -54,6 +61,7 @@ See `src/modules/`.
 | Sling | Direct API | Admin API token — quick. Used by the scheduling module. |
 | GFS / liquor | Email + order-guide CSV | No single-store order API exists, so orders are auto-drafted and sent on your approval (this is also the money-safety gate). |
 | Google Sheets / Gmail | Direct API | Data backbone + approval/order emails. |
+| Google Calendar | Direct API | Source of truth for events; read for prep reminders. |
 
 ---
 
@@ -81,10 +89,12 @@ The dry-run prints the exact approval email you'd receive on an order morning.
    - **Sling**: an admin API token (or `SLING_EMAIL`/`SLING_PASSWORD`) for the
      scheduling review.
    - **Google service account**: create one, download its JSON key, and share
-     the spreadsheet with the service-account email. For sending email, enable
-     domain-wide delegation and set `GOOGLE_IMPERSONATE_USER` to your bar's
-     Google account.
-   - `OWNER_EMAIL`, `GM_SPREADSHEET_ID`.
+     the spreadsheet with the service-account email. For sending email + reading
+     the calendar, enable domain-wide delegation (scopes: `gmail.send`,
+     `calendar.readonly`) and set `GOOGLE_IMPERSONATE_USER` to your bar's Google
+     account.
+   - `OWNER_EMAIL`, `GM_SPREADSHEET_ID`, and (optional) `GOOGLE_CALENDAR_ID`
+     (defaults to the impersonated user's primary calendar).
 3. **Verify read-only** before enabling sends:
    ```bash
    npm run ordering -- --dry-run         # math + draft email, still no sends
@@ -119,11 +129,11 @@ par?"*.
 src/
   agent/     persona.ts (system prompt), chat.ts (talk to it)
   tools/     toast, sling, googleSheets, gmail, gfs clients + mock fixtures
-  modules/   ordering + inventory + scheduling + reporting (built); events (next)
-  jobs/      runOrdering, runInventoryReminder, runScheduleReview, runWeeklyReport, checkToast
+  modules/   ordering, inventory, scheduling, reporting, events (all built)
+  jobs/      runOrdering, runInventoryReminder, runScheduleReview, runWeeklyReport, runEventReminders, checkToast
   lib/       auth, config, approval, types, logger
 config/      sheets.schema.md — the Google Sheets layout
-.github/workflows/  ordering, inventory-reminder, schedule-review, weekly-report
+.github/workflows/  ordering, inventory-reminder, schedule-review, weekly-report, event-reminders
 test/        fixtures + tests
 ```
 

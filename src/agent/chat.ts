@@ -26,6 +26,7 @@ import {
   computeWeeklyMetrics,
   rankMovers,
 } from "../modules/reporting.ts";
+import { buildPrepChecklist } from "../modules/events.ts";
 import type { Toolbox } from "../tools/clients.ts";
 import type { CountEntry } from "../lib/types.ts";
 
@@ -82,6 +83,15 @@ async function toolWeeklyReport(tb: Toolbox): Promise<string> {
   const metrics = computeWeeklyMetrics({ sales, priorSales, laborCost, costOfGoods });
   const email = buildWeeklyReportEmail(config.barName, metrics, rankMovers(depletion), orders);
   return JSON.stringify({ metrics, digest: email }, null, 2);
+}
+
+async function toolUpcomingEvents(tb: Toolbox): Promise<string> {
+  // Read-only: upcoming bookings from Google Calendar + a prep checklist each.
+  const now = new Date();
+  const to = new Date(now.getTime() + 14 * 86_400_000);
+  const events = await tb.calendar.listEvents(now.toISOString(), to.toISOString());
+  const withPrep = events.map((event) => ({ event, checklist: buildPrepChecklist(event) }));
+  return JSON.stringify(withPrep, null, 2);
 }
 
 async function toolReviewSchedule(tb: Toolbox): Promise<string> {
@@ -153,6 +163,12 @@ const TOOLS = [
       "Compute the weekly GM digest: sales vs last week, labor %, pour cost, top/slow movers, and what was ordered.",
     input_schema: { type: "object" as const, properties: {}, required: [] },
   },
+  {
+    name: "upcoming_events",
+    description:
+      "List bookings in the next 2 weeks from Google Calendar, each with a staffing + stock prep checklist.",
+    input_schema: { type: "object" as const, properties: {}, required: [] },
+  },
 ];
 
 async function runTool(name: string, input: unknown, tb: Toolbox): Promise<string> {
@@ -169,6 +185,8 @@ async function runTool(name: string, input: unknown, tb: Toolbox): Promise<strin
       return toolReviewSchedule(tb);
     case "weekly_report":
       return toolWeeklyReport(tb);
+    case "upcoming_events":
+      return toolUpcomingEvents(tb);
     default:
       return `Unknown tool: ${name}`;
   }

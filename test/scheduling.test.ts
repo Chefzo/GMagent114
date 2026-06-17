@@ -10,7 +10,7 @@ import {
   runScheduleReview,
   summarizeGaps,
 } from "../src/modules/scheduling.ts";
-import { MockBackbone, MockMailer, MockSales, MockSchedule } from "../src/tools/mock.ts";
+import { MockBackbone, MockCalendar, MockMailer, MockSales, MockSchedule } from "../src/tools/mock.ts";
 import type { Toolbox } from "../src/tools/clients.ts";
 import { fixtureScheduling, fixtureShifts } from "./fixtures.ts";
 
@@ -52,6 +52,7 @@ test("end-to-end dry-run: review emails the owner with all three flags", async (
     data: new MockBackbone(),
     sales: new MockSales(),
     schedule: new MockSchedule(),
+    calendar: new MockCalendar(),
     mailer,
     dryRun: true,
   };
@@ -77,7 +78,7 @@ test("runScheduleReview: no email when schedule is clean", async () => {
     defaultHourlyWage: 18,
     wageByBartender: {},
   });
-  const tb: Toolbox = { data, sales: new MockSales(), schedule: new MockSchedule(), mailer, dryRun: true };
+  const tb: Toolbox = { data, sales: new MockSales(), schedule: new MockSchedule(), calendar: new MockCalendar(), mailer, dryRun: true };
 
   const review = await runScheduleReview(tb, "2026-06-21T00:00:00Z", "2026-06-28T00:00:00Z");
   assert.equal(review.email, null);

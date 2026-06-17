@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { computeReorder, runOrderingPass, sendApprovedOrders } from "../src/modules/ordering.ts";
 import { parseApprovalReply, resolveApprovedVendors } from "../src/lib/approval.ts";
-import { MockBackbone, MockMailer, MockSales, MockSchedule } from "../src/tools/mock.ts";
+import { MockBackbone, MockCalendar, MockMailer, MockSales, MockSchedule } from "../src/tools/mock.ts";
 import type { Toolbox } from "../src/tools/clients.ts";
 import { fixtureCatalog, fixtureConfig, fixtureInventory, fixtureParLevels } from "./fixtures.ts";
 
@@ -57,7 +57,7 @@ test("parseApprovalReply: handles ALL, single vendor, and skip", () => {
 test("end-to-end dry-run: depletion applied, drafts produced, approval email sent, approved orders sent", async () => {
   const data = new MockBackbone();
   const mailer = new MockMailer();
-  const tb: Toolbox = { data, sales: new MockSales(), schedule: new MockSchedule(), mailer, dryRun: true };
+  const tb: Toolbox = { data, sales: new MockSales(), schedule: new MockSchedule(), calendar: new MockCalendar(), mailer, dryRun: true };
 
   const { drafts, approvalEmail } = await runOrderingPass(tb, "2026-06-09T00:00:00Z");
 

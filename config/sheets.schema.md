@@ -57,8 +57,12 @@ Appended by the agent when an order is sent.
 
 `timestamp | vendor | items | estTotal | status`
 
-## Events  (used by the events module, built after v1)
-`date | name | contact | headcount | status | checklist`
+## Events
+Events live in **Google Calendar** (the source of truth) — the events module
+reads bookings from there, not from a Sheet tab. Put `headcount: 80` and
+`contact: …` in the calendar event's description and the agent will pick them up
+for the prep checklist. Set `GOOGLE_CALENDAR_ID` if it isn't the impersonated
+user's primary calendar.
 
 ## Schedule  (used by the scheduling module)
 `date | bartender | start | end | position | source`

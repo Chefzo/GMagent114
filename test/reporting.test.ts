@@ -9,7 +9,7 @@ import {
   rankMovers,
   runWeeklyReport,
 } from "../src/modules/reporting.ts";
-import { MockBackbone, MockMailer, MockSales, MockSchedule } from "../src/tools/mock.ts";
+import { MockBackbone, MockCalendar, MockMailer, MockSales, MockSchedule } from "../src/tools/mock.ts";
 import type { Toolbox } from "../src/tools/clients.ts";
 import { fixtureSales } from "./fixtures.ts";
 
@@ -57,6 +57,7 @@ test("end-to-end dry-run: report emails the owner with sales delta and labor %",
     data: new MockBackbone(),
     sales: new MockSales(),
     schedule: new MockSchedule(),
+    calendar: new MockCalendar(),
     mailer,
     dryRun: true,
   };

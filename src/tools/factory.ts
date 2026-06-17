@@ -5,6 +5,7 @@ import { GoogleSheetsBackbone } from "./googleSheets.ts";
 import { ToastSalesSource } from "./toast.ts";
 import { GmailMailer } from "./gmail.ts";
 import { SlingClient } from "./sling.ts";
+import { GoogleCalendarSource } from "./googleCalendar.ts";
 import type { ScheduleSource, Toolbox } from "./clients.ts";
 import type { Shift } from "../lib/types.ts";
 
@@ -38,6 +39,7 @@ export function liveToolbox(): Toolbox {
     data: new GoogleSheetsBackbone(),
     sales: new ToastSalesSource(),
     schedule: new SlingScheduleSource(),
+    calendar: new GoogleCalendarSource(),
     mailer: new GmailMailer(),
     dryRun: false,
   };

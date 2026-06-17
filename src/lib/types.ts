@@ -89,6 +89,18 @@ export interface OrderRecord {
   status: string; // "sent" | ...
 }
 
+/** An event read from Google Calendar (the source of truth for bookings). */
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  start: string; // ISO
+  end: string; // ISO
+  /** Parsed from the event description ("headcount: 80") when present. */
+  headcount?: number;
+  contact?: string;
+  notes?: string;
+}
+
 export interface BarConfig {
   barName: string;
   ownerEmail: string;

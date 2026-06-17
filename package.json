@@ -11,6 +11,7 @@
     "inventory:reminder": "tsx src/jobs/runInventoryReminder.ts",
     "schedule:review": "tsx src/jobs/runScheduleReview.ts",
     "report:weekly": "tsx src/jobs/runWeeklyReport.ts",
+    "events:remind": "tsx src/jobs/runEventReminders.ts",
     "check:toast": "tsx src/jobs/checkToast.ts",
     "chat": "tsx src/agent/chat.ts",
     "test": "tsx --test test/*.test.ts",

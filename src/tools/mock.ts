@@ -5,6 +5,7 @@
 import { log } from "../lib/logger.ts";
 import type {
   BarConfig,
+  CalendarEvent,
   CatalogEntry,
   CountEntry,
   Depletion,
@@ -14,11 +15,20 @@ import type {
   SchedulingConfig,
   Shift,
 } from "../lib/types.ts";
-import type { Attachment, DataBackbone, Mailer, SalesSource, ScheduleSource, Toolbox } from "./clients.ts";
+import type {
+  Attachment,
+  CalendarSource,
+  DataBackbone,
+  Mailer,
+  SalesSource,
+  ScheduleSource,
+  Toolbox,
+} from "./clients.ts";
 import {
   fixtureCatalog,
   fixtureConfig,
   fixtureDepletion,
+  fixtureEvents,
   fixtureInventory,
   fixtureOrderHistory,
   fixtureParLevels,
@@ -101,6 +111,12 @@ export class MockSchedule implements ScheduleSource {
   }
 }
 
+export class MockCalendar implements CalendarSource {
+  async listEvents(_fromIso: string, _toIso: string): Promise<CalendarEvent[]> {
+    return fixtureEvents.map((e) => ({ ...e }));
+  }
+}
+
 export class MockMailer implements Mailer {
   sent: { to: string; subject: string; body: string; attachments: Attachment[] }[] = [];
   async send(to: string, subject: string, body: string, attachments: Attachment[] = []): Promise<void> {
@@ -115,6 +131,7 @@ export function mockToolbox(): Toolbox {
     data: new MockBackbone(),
     sales: new MockSales(),
     schedule: new MockSchedule(),
+    calendar: new MockCalendar(),
     mailer: new MockMailer(),
     dryRun: true,
   };

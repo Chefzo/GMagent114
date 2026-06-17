@@ -4,6 +4,7 @@
 
 import type {
   BarConfig,
+  CalendarEvent,
   CatalogEntry,
   Depletion,
   InventoryItem,
@@ -86,6 +87,34 @@ export const fixtureOrderHistory: OrderRecord[] = [
 
 // Weekly net sales (revenue $). thisWeek is up ~9% on priorWeek for the demo.
 export const fixtureSales = { thisWeek: 24800, priorWeek: 22750 };
+
+// Upcoming bookings, as they'd come back from Google Calendar. Times are
+// relative to "now" so the reminder window always picks them up in the demo.
+const inDays = (d: number, hour: number) => {
+  const t = new Date(Date.now() + d * 86_400_000);
+  t.setHours(hour, 0, 0, 0);
+  return t.toISOString();
+};
+export const fixtureEvents: CalendarEvent[] = [
+  {
+    id: "evt-birthday",
+    title: "Mara's 30th — private party",
+    start: inDays(2, 19),
+    end: inDays(2, 23),
+    headcount: 80,
+    contact: "Mara (555-0142)",
+    notes: "headcount: 80\ncontact: Mara (555-0142)",
+  },
+  {
+    id: "evt-corp",
+    title: "Acme Corp happy hour",
+    start: inDays(5, 17),
+    end: inDays(5, 20),
+    headcount: 35,
+    contact: "Dev R.",
+    notes: "guests: 35\ncontact: Dev R.",
+  },
+];
 
 export const fixtureScheduling: SchedulingConfig = {
   // Need 2 bartenders Thu/Fri/Sat evenings (18:00–24:00).

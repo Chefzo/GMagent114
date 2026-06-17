@@ -4,6 +4,7 @@
 
 import type {
   BarConfig,
+  CalendarEvent,
   CatalogEntry,
   CountEntry,
   Depletion,
@@ -42,6 +43,11 @@ export interface ScheduleSource {
   getShifts(fromIso: string, toIso: string): Promise<Shift[]>;
 }
 
+export interface CalendarSource {
+  /** Events overlapping [fromIso, toIso], read from Google Calendar. */
+  listEvents(fromIso: string, toIso: string): Promise<CalendarEvent[]>;
+}
+
 export interface Mailer {
   /** Send an email. In dry-run this only logs. */
   send(to: string, subject: string, body: string, attachments?: Attachment[]): Promise<void>;
@@ -58,6 +64,7 @@ export interface Toolbox {
   data: DataBackbone;
   sales: SalesSource;
   schedule: ScheduleSource;
+  calendar: CalendarSource;
   mailer: Mailer;
   dryRun: boolean;
 }
