@@ -9,6 +9,8 @@ import type {
   Depletion,
   InventoryItem,
   ParLevel,
+  SchedulingConfig,
+  Shift,
 } from "../lib/types.ts";
 
 export interface DataBackbone {
@@ -16,6 +18,7 @@ export interface DataBackbone {
   getParLevels(): Promise<ParLevel[]>;
   getInventory(): Promise<InventoryItem[]>;
   getCatalog(): Promise<CatalogEntry[]>;
+  getSchedulingConfig(): Promise<SchedulingConfig>;
   /** Apply depletion to on-hand counts and persist. */
   applyDepletion(depletion: Depletion[]): Promise<void>;
   /** Overwrite on-hand for physically counted items (upsert), stamping lastCounted=today. */
@@ -27,6 +30,11 @@ export interface DataBackbone {
 export interface SalesSource {
   /** Units consumed since `sinceIso`, already converted to ParLevel units. */
   getDepletionSince(sinceIso: string): Promise<Depletion[]>;
+}
+
+export interface ScheduleSource {
+  /** Published shifts overlapping [fromIso, toIso], normalized to `Shift`. */
+  getShifts(fromIso: string, toIso: string): Promise<Shift[]>;
 }
 
 export interface Mailer {
@@ -44,6 +52,7 @@ export interface Attachment {
 export interface Toolbox {
   data: DataBackbone;
   sales: SalesSource;
+  schedule: ScheduleSource;
   mailer: Mailer;
   dryRun: boolean;
 }

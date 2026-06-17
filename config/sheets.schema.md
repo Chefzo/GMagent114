@@ -17,9 +17,18 @@ Key/value settings plus vendor definitions.
 | orderDays | Mon,Thu |
 | vendor:gfs | Gordon Food Service\|rep@gfs.com\|gfs-orderguide |
 | vendor:breakthru | Breakthru Beverage\|orders@breakthru.com\|email |
+| overtimeThreshold | 40 |
+| defaultHourlyWage | 18 |
+| weeklyLaborBudget | 1300 |
+| wage:Alex | 20 |
 
 Vendor rows use key `vendor:<key>` and value `Name|email|channel`, where
 `channel` is `email` or `gfs-orderguide`.
+
+Scheduling settings (all optional, used by the scheduling module):
+`overtimeThreshold` (weekly hours, default 40), `defaultHourlyWage` (default 15),
+`weeklyLaborBudget` (a $ cap; a projection over it is flagged), and per-bartender
+wage overrides as `wage:<bartender name>`.
 
 ## ParLevels
 The target stock and reorder trigger per item.
@@ -51,5 +60,15 @@ Appended by the agent when an order is sent.
 ## Events  (used by the events module, built after v1)
 `date | name | contact | headcount | status | checklist`
 
-## Schedule  (used by the scheduling module, built after v1)
+## Schedule  (used by the scheduling module)
 `date | bartender | start | end | position | source`
+
+Live shifts are read from Sling; this tab mirrors them for reference/manual edits.
+
+## Coverage  (used by the scheduling module)
+Minimum staffing per daypart. Absent tab => coverage-gap checks are skipped.
+
+`day | minBartenders | startHour | endHour`
+
+- `day`: a name (`Mon`) or number (`0`=Sun … `6`=Sat)
+- `startHour`/`endHour`: 24h local hours, e.g. `18` and `24`

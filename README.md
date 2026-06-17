@@ -30,8 +30,16 @@ lists, and emails you the proposed orders. Nothing is purchased until you reply
   **variance** vs. the theoretical on-hand sales implied — flagging likely
   over-pours/shrinkage (SHORT) or unlogged receipts (OVER).
 
-**Designed and stubbed, built next:** Sling scheduling, events, and a weekly GM
-report. See `src/modules/`.
+**Scheduling review (built):**
+- A weekly job reads next week's published **Sling** shifts and emails the owner
+  a review ([`schedule-review`](.github/workflows/schedule-review.yml) workflow):
+  **coverage gaps** (below the minimum bartenders for a daypart), **overtime
+  risk** (anyone over the weekly threshold), and **projected labor cost** vs. a
+  budget. Read-only — drafting/pushing a schedule back to Sling stays
+  approval-gated.
+
+**Designed and stubbed, built next:** events and a weekly GM report. See
+`src/modules/`.
 
 ### How the integrations actually connect
 | System | How | Notes |
@@ -64,7 +72,8 @@ The dry-run prints the exact approval email you'd receive on an order morning.
    - **Anthropic API key** (for the chat agent).
    - **Toast**: ask your Toast rep to enable *Standard API Access* → client ID,
      secret, restaurant GUID. *(Start this first — it can take days/weeks.)*
-   - **Sling**: an admin API token (for scheduling, built next).
+   - **Sling**: an admin API token (or `SLING_EMAIL`/`SLING_PASSWORD`) for the
+     scheduling review.
    - **Google service account**: create one, download its JSON key, and share
      the spreadsheet with the service-account email. For sending email, enable
      domain-wide delegation and set `GOOGLE_IMPERSONATE_USER` to your bar's
@@ -104,11 +113,11 @@ par?"*.
 src/
   agent/     persona.ts (system prompt), chat.ts (talk to it)
   tools/     toast, sling, googleSheets, gmail, gfs clients + mock fixtures
-  modules/   ordering + inventory (built); scheduling/events/reporting (next)
-  jobs/      runOrdering.ts, runInventoryReminder.ts, checkToast.ts
+  modules/   ordering + inventory + scheduling (built); events/reporting (next)
+  jobs/      runOrdering.ts, runInventoryReminder.ts, runScheduleReview.ts, checkToast.ts
   lib/       auth, config, approval, types, logger
 config/      sheets.schema.md — the Google Sheets layout
-.github/workflows/  ordering.yml, inventory-reminder.yml — the schedulers
+.github/workflows/  ordering, inventory-reminder, schedule-review — the schedulers
 test/        fixtures + tests
 ```
 

@@ -14,6 +14,13 @@ import { mockToolbox } from "../tools/mock.ts";
 import { liveToolbox } from "../tools/factory.ts";
 import { computeReorder, buildApprovalEmail } from "../modules/ordering.ts";
 import { buildCountChecklist, runVarianceReview } from "../modules/inventory.ts";
+import {
+  buildScheduleReviewEmail,
+  computeCoverageGaps,
+  computeLaborProjection,
+  computeOvertimeRisk,
+  summarizeGaps,
+} from "../modules/scheduling.ts";
 import type { Toolbox } from "../tools/clients.ts";
 import type { CountEntry } from "../lib/types.ts";
 
@@ -49,6 +56,23 @@ async function toolRecordCount(tb: Toolbox, input: unknown): Promise<string> {
   if (counts.length === 0) return `No valid counts provided. Expected {"counts":[{"item","onHand"}]}.`;
   const review = await runVarianceReview(tb, counts);
   return JSON.stringify({ recorded: counts.length, flagged: review.flagged, report: review.email }, null, 2);
+}
+
+async function toolReviewSchedule(tb: Toolbox): Promise<string> {
+  // Read-only: review the next 7 days' published shifts. Does not send email.
+  const now = new Date();
+  const to = new Date(now);
+  to.setDate(to.getDate() + 7);
+  const [config, sched, shifts] = await Promise.all([
+    tb.data.getConfig(),
+    tb.data.getSchedulingConfig(),
+    tb.schedule.getShifts(now.toISOString(), to.toISOString()),
+  ]);
+  const windows = summarizeGaps(computeCoverageGaps(shifts, sched.coverageRules));
+  const overtime = computeOvertimeRisk(shifts, sched.overtimeThreshold);
+  const labor = computeLaborProjection(shifts, sched);
+  const email = buildScheduleReviewEmail(windows, overtime, labor, config);
+  return JSON.stringify({ windows, overtime, labor, summary: email }, null, 2);
 }
 
 const TOOLS = [
@@ -91,6 +115,12 @@ const TOOLS = [
       required: ["counts"],
     },
   },
+  {
+    name: "review_schedule",
+    description:
+      "Review the next 7 days of published shifts for coverage gaps, overtime risk, and projected labor cost.",
+    input_schema: { type: "object" as const, properties: {}, required: [] },
+  },
 ];
 
 async function runTool(name: string, input: unknown, tb: Toolbox): Promise<string> {
@@ -103,6 +133,8 @@ async function runTool(name: string, input: unknown, tb: Toolbox): Promise<strin
       return toolCountChecklist(tb);
     case "record_count":
       return toolRecordCount(tb, input);
+    case "review_schedule":
+      return toolReviewSchedule(tb);
     default:
       return `Unknown tool: ${name}`;
   }

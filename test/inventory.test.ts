@@ -11,7 +11,7 @@ import {
   recordCount,
   runVarianceReview,
 } from "../src/modules/inventory.ts";
-import { MockBackbone, MockMailer, MockSales } from "../src/tools/mock.ts";
+import { MockBackbone, MockMailer, MockSales, MockSchedule } from "../src/tools/mock.ts";
 import type { Toolbox } from "../src/tools/clients.ts";
 import { fixtureConfig, fixtureParLevels } from "./fixtures.ts";
 
@@ -68,7 +68,7 @@ test("recordCount: flattens a session and persists to the backbone", async () =>
 test("runVarianceReview: persists counts, flags out-of-tolerance, emails owner", async () => {
   const data = new MockBackbone();
   const mailer = new MockMailer();
-  const tb: Toolbox = { data, sales: new MockSales(), mailer, dryRun: true };
+  const tb: Toolbox = { data, sales: new MockSales(), schedule: new MockSchedule(), mailer, dryRun: true };
 
   // Fixture Tito's theoretical on-hand is 10; physically count 6 -> SHORT 4 (flagged).
   // Jameson theoretical 7; count 7 -> variance 0 (not flagged).
@@ -93,7 +93,7 @@ test("runVarianceReview: persists counts, flags out-of-tolerance, emails owner",
 test("runVarianceReview: no alert when everything is within tolerance", async () => {
   const data = new MockBackbone();
   const mailer = new MockMailer();
-  const tb: Toolbox = { data, sales: new MockSales(), mailer, dryRun: true };
+  const tb: Toolbox = { data, sales: new MockSales(), schedule: new MockSchedule(), mailer, dryRun: true };
 
   const review = await runVarianceReview(tb, [{ item: "Jameson 1L", onHand: 7 }]); // matches fixture 7
   assert.equal(review.flagged.length, 0);

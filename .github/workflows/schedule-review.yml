@@ -1,0 +1,41 @@
+name: GM Agent — Schedule Review
+
+# Reviews next week's published Sling schedule for coverage gaps, overtime, and
+# labor budget, and emails the owner. Read-only — never writes a schedule.
+# Cron is UTC; the example is 16:00 UTC Thursday (~11am US Eastern), after next
+# week's schedule is typically posted. Adjust to your posting day/timezone.
+on:
+  schedule:
+    - cron: "0 16 * * 4"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run with fixtures only (no live APIs, no emails)"
+        type: boolean
+        default: false
+
+jobs:
+  schedule-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Run schedule review
+        env:
+          SLING_API_TOKEN: ${{ secrets.SLING_API_TOKEN }}
+          SLING_EMAIL: ${{ secrets.SLING_EMAIL }}
+          SLING_PASSWORD: ${{ secrets.SLING_PASSWORD }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_IMPERSONATE_USER: ${{ secrets.GOOGLE_IMPERSONATE_USER }}
+          GM_SPREADSHEET_ID: ${{ secrets.GM_SPREADSHEET_ID }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            npm run schedule:review -- --dry-run
+          else
+            npm run schedule:review
+          fi

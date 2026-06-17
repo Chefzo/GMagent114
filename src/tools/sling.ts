@@ -1,6 +1,6 @@
-// Live Sling client (used by the scheduling module, built after v1). Reads the
-// current user's org, users, and published shifts. Sling's token is bound to
-// the admin login, so an admin token sees all shifts.
+// Live Sling client (used by the scheduling module). Reads the current user's
+// org, users, and published shifts. Sling's token is bound to the admin login,
+// so an admin token sees all shifts.
 
 import { slingAuth } from "../lib/auth.ts";
 import { log } from "../lib/logger.ts";

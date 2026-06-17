@@ -10,15 +10,26 @@ import type {
   CatalogEntry,
   Category,
   CountEntry,
+  CoverageRule,
   Depletion,
   InventoryItem,
   ParLevel,
+  SchedulingConfig,
   Vendor,
 } from "../lib/types.ts";
 import type { DataBackbone } from "./clients.ts";
 
 const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const API = "https://sheets.googleapis.com/v4/spreadsheets";
+
+const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+/** Parse a Coverage `day` cell: a number 0-6, or a name like "Mon"/"Friday". */
+function parseDay(raw: string): number {
+  const t = raw.trim().toLowerCase();
+  if (/^\d+$/.test(t)) return Number(t);
+  const i = DAY_NAMES.indexOf(t.slice(0, 3));
+  return i === -1 ? 0 : i;
+}
 
 /** Map a sheet's first row to keys, returning the rest as keyed records. */
 function rowsToObjects(values: string[][]): Record<string, string>[] {
@@ -110,6 +121,39 @@ export class GoogleSheetsBackbone implements DataBackbone {
       packSize: Number(r.packSize ?? 1),
       lastPrice: Number(r.lastPrice ?? 0),
     }));
+  }
+
+  async getSchedulingConfig(): Promise<SchedulingConfig> {
+    const rows = await this.readTab("Config");
+    const kv: Record<string, string> = {};
+    const wageByBartender: Record<string, number> = {};
+    for (const r of rows) {
+      if (!r.key) continue;
+      if (r.key.startsWith("wage:")) wageByBartender[r.key.slice("wage:".length)] = Number(r.value ?? 0);
+      else kv[r.key] = r.value ?? "";
+    }
+
+    // Coverage rules live in their own tab; absent tab => no rules (no gaps).
+    let coverageRules: CoverageRule[] = [];
+    try {
+      coverageRules = (await this.readTab("Coverage")).map((r) => ({
+        day: parseDay(r.day ?? ""),
+        minBartenders: Number(r.minBartenders ?? 1),
+        startHour: Number(r.startHour ?? 0),
+        endHour: Number(r.endHour ?? 24),
+      }));
+    } catch {
+      log.debug("No Coverage tab found — skipping coverage-gap checks.");
+    }
+
+    const budget = kv.weeklyLaborBudget ? Number(kv.weeklyLaborBudget) : undefined;
+    return {
+      coverageRules,
+      overtimeThreshold: kv.overtimeThreshold ? Number(kv.overtimeThreshold) : 40,
+      defaultHourlyWage: kv.defaultHourlyWage ? Number(kv.defaultHourlyWage) : 15,
+      wageByBartender,
+      weeklyLaborBudget: budget,
+    };
   }
 
   /** Overwrite the whole Inventory tab from a list of rows. */

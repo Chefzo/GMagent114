@@ -86,3 +86,36 @@ export interface BarConfig {
   orderDays: string[];
   vendors: Record<string, Vendor>;
 }
+
+/** A normalized bartender shift (decoupled from any one scheduling API). */
+export interface Shift {
+  bartender: string;
+  /** Day of week 0-6 (Sun..Sat). */
+  day: number;
+  /** Local hours, 0-24. A shift ending past midnight uses endHour > 24. */
+  startHour: number;
+  endHour: number;
+}
+
+/** A minimum-staffing rule for a daypart on one day of the week. */
+export interface CoverageRule {
+  /** Day of week 0-6 (Sun..Sat). */
+  day: number;
+  /** Minimum bartenders required during the window. */
+  minBartenders: number;
+  startHour: number;
+  endHour: number;
+}
+
+/** Inputs that drive the schedule review (read from the Sheet / fixtures). */
+export interface SchedulingConfig {
+  coverageRules: CoverageRule[];
+  /** Weekly hours above which a bartender is flagged for overtime. */
+  overtimeThreshold: number;
+  defaultHourlyWage: number;
+  /** Per-bartender wage overrides, keyed by display name. */
+  wageByBartender: Record<string, number>;
+  /** Optional weekly labor $ cap; projection over this is flagged. */
+  weeklyLaborBudget?: number;
+}
+

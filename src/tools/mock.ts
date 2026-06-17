@@ -3,14 +3,25 @@
 // emails are logged, so the full ordering flow can be exercised safely.
 
 import { log } from "../lib/logger.ts";
-import type { BarConfig, CatalogEntry, CountEntry, Depletion, InventoryItem, ParLevel } from "../lib/types.ts";
-import type { Attachment, DataBackbone, Mailer, SalesSource, Toolbox } from "./clients.ts";
+import type {
+  BarConfig,
+  CatalogEntry,
+  CountEntry,
+  Depletion,
+  InventoryItem,
+  ParLevel,
+  SchedulingConfig,
+  Shift,
+} from "../lib/types.ts";
+import type { Attachment, DataBackbone, Mailer, SalesSource, ScheduleSource, Toolbox } from "./clients.ts";
 import {
   fixtureCatalog,
   fixtureConfig,
   fixtureDepletion,
   fixtureInventory,
   fixtureParLevels,
+  fixtureScheduling,
+  fixtureShifts,
 } from "../../test/fixtures.ts";
 
 export class MockBackbone implements DataBackbone {
@@ -28,6 +39,9 @@ export class MockBackbone implements DataBackbone {
   }
   async getCatalog(): Promise<CatalogEntry[]> {
     return fixtureCatalog.map((c) => ({ ...c }));
+  }
+  async getSchedulingConfig(): Promise<SchedulingConfig> {
+    return { ...fixtureScheduling, coverageRules: fixtureScheduling.coverageRules.map((r) => ({ ...r })) };
   }
   async applyDepletion(depletion: Depletion[]): Promise<void> {
     const used = new Map(depletion.map((d) => [d.item, d.unitsUsed]));
@@ -62,6 +76,12 @@ export class MockSales implements SalesSource {
   }
 }
 
+export class MockSchedule implements ScheduleSource {
+  async getShifts(_fromIso: string, _toIso: string): Promise<Shift[]> {
+    return fixtureShifts.map((s) => ({ ...s }));
+  }
+}
+
 export class MockMailer implements Mailer {
   sent: { to: string; subject: string; body: string; attachments: Attachment[] }[] = [];
   async send(to: string, subject: string, body: string, attachments: Attachment[] = []): Promise<void> {
@@ -72,5 +92,11 @@ export class MockMailer implements Mailer {
 }
 
 export function mockToolbox(): Toolbox {
-  return { data: new MockBackbone(), sales: new MockSales(), mailer: new MockMailer(), dryRun: true };
+  return {
+    data: new MockBackbone(),
+    sales: new MockSales(),
+    schedule: new MockSchedule(),
+    mailer: new MockMailer(),
+    dryRun: true,
+  };
 }

@@ -8,6 +8,8 @@ import type {
   Depletion,
   InventoryItem,
   ParLevel,
+  SchedulingConfig,
+  Shift,
 } from "../src/lib/types.ts";
 
 export const fixtureConfig: BarConfig = {
@@ -57,3 +59,32 @@ export const fixtureDepletion: Depletion[] = [
   { item: "Lime", unitsUsed: 1 }, //           2 -> 1  (<= 1)
   { item: "Cocktail Napkins", unitsUsed: 0 }, // 4 -> 4 (> 2, no reorder)
 ];
+
+// Next week's published shifts (day 0=Sun..6=Sat, local hours). Alex is heavy
+// enough to hit overtime; Friday late is short a bartender.
+export const fixtureShifts: Shift[] = [
+  { bartender: "Alex", day: 1, startHour: 16, endHour: 24 }, // Mon 8h
+  { bartender: "Alex", day: 2, startHour: 16, endHour: 24 }, // Tue 8h
+  { bartender: "Alex", day: 3, startHour: 16, endHour: 24 }, // Wed 8h
+  { bartender: "Alex", day: 4, startHour: 16, endHour: 24 }, // Thu 8h
+  { bartender: "Alex", day: 5, startHour: 18, endHour: 24 }, // Fri 6h
+  { bartender: "Alex", day: 6, startHour: 18, endHour: 24 }, // Sat 6h  -> Alex 44h (OT)
+  { bartender: "Sam", day: 4, startHour: 18, endHour: 24 }, // Thu 6h
+  { bartender: "Sam", day: 5, startHour: 18, endHour: 21 }, // Fri 3h (leaves 21-24 short)
+  { bartender: "Sam", day: 6, startHour: 18, endHour: 24 }, // Sat 6h
+  { bartender: "Jordan", day: 6, startHour: 18, endHour: 24 }, // Sat 6h
+  { bartender: "Jordan", day: 0, startHour: 14, endHour: 20 }, // Sun 6h
+];
+
+export const fixtureScheduling: SchedulingConfig = {
+  // Need 2 bartenders Thu/Fri/Sat evenings (18:00–24:00).
+  coverageRules: [
+    { day: 4, minBartenders: 2, startHour: 18, endHour: 24 },
+    { day: 5, minBartenders: 2, startHour: 18, endHour: 24 },
+    { day: 6, minBartenders: 2, startHour: 18, endHour: 24 },
+  ],
+  overtimeThreshold: 40,
+  defaultHourlyWage: 18,
+  wageByBartender: { Alex: 20 },
+  weeklyLaborBudget: 1300,
+};

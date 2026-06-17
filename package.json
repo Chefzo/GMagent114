@@ -9,6 +9,7 @@
   "scripts": {
     "ordering": "tsx src/jobs/runOrdering.ts",
     "inventory:reminder": "tsx src/jobs/runInventoryReminder.ts",
+    "schedule:review": "tsx src/jobs/runScheduleReview.ts",
     "check:toast": "tsx src/jobs/checkToast.ts",
     "chat": "tsx src/agent/chat.ts",
     "test": "tsx --test test/*.test.ts",
