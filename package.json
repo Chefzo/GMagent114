@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start -p 3001",
     "lint": "eslint .",
-    "phase1:check": "node scripts/phase1-check.mjs"
+    "phase1:check": "node scripts/phase1-check.mjs",
+    "pnl": "tsx scripts/run-pnl.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

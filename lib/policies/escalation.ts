@@ -3,6 +3,8 @@ export const ESCALATION_THRESHOLDS = {
   financialImmediate: 100,
   reviewLowStars: 3,
   maintenanceHoursOpen: 48,
+  /** Weekly prime cost % above this triggers a same-evening escalation. */
+  primeCostAlertPct: 65,
 } as const
 
 export function shouldEscalateFinancial(amount: number) {
