@@ -5,7 +5,8 @@ import { checkCronAuth } from '@/lib/policies/cronAuth'
 export async function GET(req: NextRequest) {
   const unauth = checkCronAuth(req)
   if (unauth) return unauth
-  const result = await runPermitReminderSweep()
+  const today = req.nextUrl.searchParams.get('today') ?? undefined
+  const result = await runPermitReminderSweep({ today })
   return NextResponse.json(result)
 }
 
