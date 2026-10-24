@@ -21,7 +21,7 @@ All six Phase 1 lanes are wired (not stubs). Each one runs on Vercel Cron, route
 | **Nightly digest** | `/api/gm/shift-digest` | `10 7 * * *` | Yesterday's Toast roll-up → Claude operator paragraph → voice-gated → SMS + Slack. |
 | **Pre-shift brief** | `/api/gm/pre-shift` | `0 21 * * *` | Tonight's events + live weather + drink features → terse SMS to the lead bartender. |
 | **Deposit recon** | `/api/gm/deposit-recon` | `30 12 * * *` | Counted cash drop vs Toast cash. >$50 flags, >$100 escalates. Never moves money. |
-| **Weekly P&L** | `/api/gm/pnl-snapshot` | `0 23 * * 0` | Trailing-7-day Toast roll-up + WoW + labor target → opinion, not a dump. |
+| **Weekly P&L** | `/api/gm/pnl-snapshot` | `0 23 * * 0` | QuickBooks rolling-7-day P&L (prime, food, bev, labor % vs prior week) + Toast cross-check → voice-gated opinion, not a dump. Prime cost >65% escalates. |
 | **Permits** | `/api/gm/permits` | `0 13 * * *` | 60 / 30 / 7-day renewal reminders. 7-day is an escalation. De-duped per tier. |
 | **Event lifecycle** | `/api/gm/event-lifecycle` | `0 14 * * *` | 14-day readiness check, day-of bar brief, next-day recap prompt. |
 
@@ -148,8 +148,8 @@ Hardcoded in `lib/policies/escalation.ts` and `lib/policies/approvals.ts`:
 The lanes are wired, but a few depend on inputs that aren't fully plumbed yet — they degrade gracefully and say so rather than inventing numbers:
 
 - **Deposit recon** needs the *counted* cash drop. Until the closing-checklist flow (Phase 2) or a manual entry supplies it, the lane parks an "awaiting count" row. You can pass one by hand: `?reportedCash=812.50`.
-- **Weekly P&L** has the sales side from Toast, but **labor cost** (Toast Labor API) and **food/beverage COGS** (vendor-invoice lane, Phase 2) aren't connected — those show as "pending" instead of fabricated percentages.
-- **Pre-shift** pulls live weather and the events table; the **Google Calendar** feed is still a stub (`lib/integrations/googleCalendar.ts` returns `[]`), so events come from the Supabase `events` table for now.
+- **Weekly P&L** reads QuickBooks (`QBO_*` env). Without QBO credentials it runs in `fallback` status on zeroed stub numbers and flags the data as partial. The Toast cross-check is still the most recent day, not a full week.
+- **Pre-shift** pulls live weather and the events table. The **Google Calendar** feed (`lib/integrations/googleCalendar.ts`) is optional: it returns `[]` until `GOOGLE_SERVICE_ACCOUNT_*` and `GOOGLE_CALENDAR_IDS` are set.
 
 ## Deferred to later phases
 

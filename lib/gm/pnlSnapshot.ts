@@ -1,18 +1,28 @@
-// Weekly P&L snapshot — the Sunday-PM operator read.
+// Weekly P&L snapshot job. Sunday 6pm Louisville.
 //
-// Pulls the trailing-7-day Toast roll-up plus the prior week for a
-// week-over-week comparison, layers in the labor target from gm_config, and
-// asks Claude to write an opinion (not a raw dump): top movers, the labor read,
-// and two or three levers worth pulling. Food/beverage cost % is flagged as
-// pending until the vendor-invoice lane (Phase 2) feeds real COGS.
-//
-// Falls back to a deterministic paragraph when Claude is unavailable.
+// Pipeline:
+//   1. Pull QBO P&L for the rolling 7 days (and the prior 7 for comparison).
+//   2. Pull Toast totals for the same range so we have a sales+covers cross-check.
+//   3. Ask Claude to write the operator-voice paragraph + 2-3 numbered moves.
+//   4. Gate through assertPnlVoice — bad output is replaced with the
+//      deterministic mock fallback.
+//   5. Dispatch via notifyOwner: SMS to OWNER_PHONE, post to SLACK_OPS_CHANNEL.
+//   6. Persist to weekly_pnl_snapshots + a job_runs heartbeat row.
 
-import { getToastWeekRollup, previousBusinessDateISO } from '@/lib/integrations/toast'
+import { getWeeklyPnl } from '@/lib/integrations/quickbooks'
+import { getLastNightToastDigest } from '@/lib/integrations/toast'
+import { writePnlParagraph, assertPnlVoice, type PnlInputForWriter } from '@/lib/gm/pnlWriter'
 import { getSupabaseClient } from '@/lib/integrations/supabase'
-import { generateText } from '@/lib/integrations/anthropic'
-import { notifyOwner } from '@/lib/gm/notify'
+import { ESCALATION_THRESHOLDS } from '@/lib/policies/escalation'
+import { notifyOwner, type NotifyResult } from '@/lib/gm/notify'
 import { logJobRun } from '@/lib/gm/jobLog'
+
+const DEFAULT_TARGETS = {
+  primeCostPct: 55,
+  laborPct: 25,
+  foodCostPct: 30,
+  bevCostPct: 20,
+}
 
 /** Pure: week-over-week percentage change, guarding divide-by-zero. */
 export function wowDeltaPct(current: number, prior: number): number {
@@ -26,89 +36,110 @@ export function laborPct(laborCost: number | null, sales: number): number | null
   return Number(((laborCost / sales) * 100).toFixed(1))
 }
 
-const PNL_SYSTEM_PROMPT = `
-You are the One Fourteen Virtual GM writing the Sunday-evening weekly P&L read
-to the owner, Enzo. Operator voice, no fluff, no markdown, no exclamation
-points. This is an opinion, not a data dump. Lead with the read on the week,
-name the labor situation against target, call the top movers only if they
-change a decision, and end with two or three concrete levers to pull this week.
-Three to six sentences. If COGS/cost data is marked pending, say so in one
-clause and don't invent food or beverage cost percentages.
-`.trim()
-
-interface PnlInputs {
-  weekEnding: string
-  netSales: number
-  priorNetSales: number
-  wowPct: number
-  avgDailyNet: number
-  totalGuests: number
-  laborTargetPct: number
-  laborPct: number | null
-  topMovers: Array<{ name: string; qty: number }>
-  daysWithData: number
-}
-
-function mockPnl(i: PnlInputs): string {
-  const dir = i.wowPct >= 0 ? 'up' : 'down'
-  const labor = i.laborPct != null ? `Labor ran ${i.laborPct}% against a ${i.laborTargetPct}% target` : `Labor data pending`
-  const top = i.topMovers[0]?.name ?? 'the well'
-  return `Week ending ${i.weekEnding}: $${Math.round(i.netSales).toLocaleString()} net, ${dir} ${Math.abs(i.wowPct)}% on the prior week. ${labor}. ${top} led the movers. Cost percentages pending the invoice lane. Lever this week: hold the line on labor against the slower weeknights and push the top mover where the margin sits.`
-}
-
-async function writePnl(i: PnlInputs): Promise<string> {
-  if (process.env.DIGEST_DRY_RUN === '1') return mockPnl(i)
-  const user = ['This week vs prior:', JSON.stringify(i, null, 2), '', 'Write the weekly P&L read.'].join('\n')
-  const text = await generateText({ system: PNL_SYSTEM_PROMPT, user, maxTokens: 500 })
-  return text ?? mockPnl(i)
-}
-
 export async function runPnlSnapshot(opts: { weekEnding?: string } = {}) {
-  const weekEnding = opts.weekEnding ?? previousBusinessDateISO()
+  const qbo = await getWeeklyPnl(opts.weekEnding)
 
-  const thisWeek = await getToastWeekRollup(weekEnding, 7)
-  const priorEnd = new Date(`${weekEnding}T12:00:00Z`)
-  priorEnd.setUTCDate(priorEnd.getUTCDate() - 7)
-  const priorWeek = await getToastWeekRollup(priorEnd.toISOString().slice(0, 10), 7)
+  // Use Toast as a sales cross-check. The shiftDigest pull is a single-day
+  // function; for week totals we'd add a true weekly Toast fetch later. For now
+  // we pass the most recent day's covers/sales so Claude has a sanity anchor.
+  let toastTotals: PnlInputForWriter['toastTotals']
+  try {
+    const td = await getLastNightToastDigest()
+    if (td.netSales !== null && td.netSales !== undefined) {
+      toastTotals = {
+        netSales: Number(td.netSales) || 0,
+        covers: Number(td.totalGuests ?? 0) || 0,
+        laborPct: td.laborPct ?? null,
+      }
+    }
+  } catch (err) {
+    console.warn('[pnl-snapshot] Toast totals cross-check failed', err)
+  }
 
-  // Labor target from config (default 27%). Actual labor % now comes from the
-  // Toast labor pull (time entries × wage) folded into the week roll-up below.
-  let laborTargetPct = 27
+  const input: PnlInputForWriter = {
+    weekStart: qbo.weekStart,
+    weekEnd: qbo.weekEnd,
+    revenue: qbo.revenue,
+    cogsTotal: qbo.cogsTotal,
+    cogsFood: qbo.cogsFood,
+    cogsBev: qbo.cogsBev,
+    labor: qbo.labor,
+    primeCostPct: qbo.primeCostPct,
+    foodCostPct: qbo.foodCostPct,
+    bevCostPct: qbo.bevCostPct,
+    laborPct: qbo.laborPct,
+    netIncome: qbo.netIncome,
+    source: qbo.source,
+    flags: qbo.flags,
+    prior: qbo.prior,
+    toastTotals,
+    targets: DEFAULT_TARGETS,
+  }
+
+  let paragraph = await writePnlParagraph(input)
+  const voice = assertPnlVoice(paragraph)
+  if (!voice.ok) {
+    console.warn('[pnl-snapshot] voice rules failed, regenerating with mock writer', voice.reasons)
+    const prev = process.env.PNL_DRY_RUN
+    process.env.PNL_DRY_RUN = '1'
+    paragraph = await writePnlParagraph(input)
+    if (prev === undefined) delete process.env.PNL_DRY_RUN
+    else process.env.PNL_DRY_RUN = prev
+  }
+
+  const dispatch = await notifyOwner({ text: paragraph })
+
+  // Optional escalation: if prime cost crosses the escalation threshold, surface
+  // an additional alert. ESCALATION_THRESHOLDS is the source of truth.
+  let escalated = false
+  if (qbo.primeCostPct !== null && qbo.primeCostPct > (ESCALATION_THRESHOLDS.primeCostAlertPct ?? 65)) {
+    const alert = `Prime cost alert: ${qbo.primeCostPct}% this week is over the ${ESCALATION_THRESHOLDS.primeCostAlertPct ?? 65}% escalation threshold.`
+    await notifyOwner({ text: alert }).catch(() => null)
+    escalated = true
+  }
+
+  await persist({
+    weekEnding: qbo.weekEnd,
+    summary: paragraph,
+    payload: { qbo, toast: toastTotals ?? null, input },
+    dispatch,
+  })
+
+  const status = qbo.source === 'qbo_live' ? 'ready' : 'fallback'
+  await logJobRun({
+    job: 'pnl-snapshot',
+    status,
+    summary: paragraph,
+    payload: { source: qbo.source, flags: qbo.flags, dispatch },
+    escalated,
+  })
+
+  return {
+    job: 'pnl-snapshot',
+    status,
+    voiceOk: voice.ok,
+    voiceReasons: voice.reasons,
+    summary: paragraph,
+    sms: dispatch.sms,
+    slack: dispatch.slack,
+    rede: dispatch.rede,
+    payload: { qbo, toast: toastTotals ?? null },
+  }
+}
+
+async function persist(opts: {
+  weekEnding: string
+  summary: string
+  payload: unknown
+  dispatch: NotifyResult
+}) {
   const supabase = getSupabaseClient()
-  if (supabase) {
-    const { data } = await supabase.from('gm_config').select('value_json').eq('key', 'labor_target_pct').maybeSingle()
-    const v = (data?.value_json as { pct?: number } | number | undefined)
-    if (typeof v === 'number') laborTargetPct = v
-    else if (v && typeof v.pct === 'number') laborTargetPct = v.pct
-  }
-
-  const inputs: PnlInputs = {
-    weekEnding,
-    netSales: thisWeek.netSales,
-    priorNetSales: priorWeek.netSales,
-    wowPct: wowDeltaPct(thisWeek.netSales, priorWeek.netSales),
-    avgDailyNet: thisWeek.avgDailyNet,
-    totalGuests: thisWeek.totalGuests,
-    laborTargetPct,
-    laborPct: laborPct(thisWeek.laborCost, thisWeek.netSales),
-    topMovers: thisWeek.topMovers,
-    daysWithData: thisWeek.daysWithData,
-  }
-
-  const summary = await writePnl(inputs)
-  const dispatch = await notifyOwner({ text: summary })
-
-  if (supabase) {
-    await supabase.from('weekly_pnl_snapshots').insert({
-      week_ending: weekEnding,
-      summary_text: summary,
-      payload_json: { ...inputs, source: thisWeek.source },
-      sent_at: dispatch.sms.ok || dispatch.slack.ok ? new Date().toISOString() : null,
-    })
-  }
-
-  const status = thisWeek.source === 'toast_live' ? 'ready' : 'fallback'
-  await logJobRun({ job: 'pnl-snapshot', status, summary, payload: { inputs, dispatch } })
-
-  return { job: 'pnl-snapshot', status, summary, inputs, dispatch }
+  if (!supabase) return
+  const now = new Date().toISOString()
+  await supabase.from('weekly_pnl_snapshots').insert({
+    week_ending: opts.weekEnding,
+    summary_text: opts.summary,
+    payload_json: opts.payload as Record<string, unknown>,
+    sent_at: (opts.dispatch.sms.ok || opts.dispatch.slack.ok) ? now : null,
+  })
 }

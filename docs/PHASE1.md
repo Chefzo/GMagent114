@@ -5,9 +5,9 @@ All six Phase 1 lanes are wired on the Next.js + Supabase + Vercel Cron stack.
 | Lane | Status | Notes |
 |---|---|---|
 | Toast end-of-shift digest | ✅ live | Live Toast pull → Claude → voice gate → SMS/Slack → `shift_digests`. |
-| Pre-shift brief | ✅ live | Live weather + events table + features → bartender SMS. Google Calendar feed still a stub. |
+| Pre-shift brief | ✅ live | Live weather + events table + features → bartender SMS. Google Calendar feed optional (needs `GOOGLE_*`). |
 | Deposit reconciliation | ✅ live | Toast cash vs counted drop. Needs the counted figure (inline param or `actual_cash_reported`). |
-| Weekly P&L snapshot | ✅ live | Sales side from Toast + WoW. Labor cost + COGS still pending their feeds. |
+| Weekly P&L snapshot | ✅ live | QuickBooks P&L (prime/food/bev/labor %) + Toast cross-check → `weekly_pnl_snapshots`. |
 | Permit reminders | ✅ live | 60/30/7-day tiers, de-duped, 7-day escalates. Seed real renewal dates. |
 | Event lifecycle | ✅ live | 14-day / day-of / recap off the `events` table. |
 

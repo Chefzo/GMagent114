@@ -40,8 +40,8 @@ export async function runPreShiftBrief(opts: { date?: string } = {}) {
 
   const [weather, calendarEvents] = await Promise.all([getTonightWeather(), getUpcomingEvents()])
 
-  // Tonight's events from the events table (calendar feed is still a stub).
-  let eventNames: string[] = (calendarEvents as Array<{ name?: string }>).map((e) => e.name ?? '').filter(Boolean)
+  // Tonight's events: Google Calendar (empty unless GOOGLE_* is set) plus the events table.
+  let eventNames: string[] = calendarEvents.map((e) => e.title).filter(Boolean)
   let features: string[] = []
   type Lead = { id?: number; name?: string; phone?: string }
   let lead: Lead | null = null

@@ -9,6 +9,7 @@
     "start": "next start -p 3001",
     "lint": "eslint .",
     "phase1:check": "node scripts/phase1-check.mjs",
+    "pnl": "tsx scripts/run-pnl.mjs",
     "typecheck": "tsc --noEmit",
     "test": "tsx scripts/voice-rules.test.mjs && tsx scripts/lanes.test.mjs",
     "smoke": "tsx scripts/smoke-digest.mjs"
