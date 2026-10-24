@@ -1,3 +1,9 @@
+-- ⚠ SUPERSEDED — DO NOT RUN. The source of truth is supabase/schema.sql.
+-- This file describes the June 23 table design (permit_items, deposit_records,
+-- deposit_recons, event_milestones, pre_shift_briefs.brief_date …) that was never
+-- applied to the live project and that the current lanes no longer read. Kept
+-- for history only; delete once the July lanes are live.
+--
 -- GMagent114 Supabase schema
 -- Run in Supabase Dashboard → SQL Editor.
 -- Tables are append-only logs; nothing is updated in place.

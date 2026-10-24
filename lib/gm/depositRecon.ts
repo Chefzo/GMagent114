@@ -1,105 +1,108 @@
-// Deposit reconciliation job — fires daily at 7:30am Louisville.
+// Deposit reconciliation — the morning-after cash check.
 //
-// Pipeline:
-//   1. Pull yesterday's Toast cash sales.
-//   2. Look up the manager's deposit entry from deposit_records in Supabase.
-//      If no record exists, fire a missing-deposit alert.
-//   3. Compute variance: Toast cash vs recorded deposit.
-//   4. If variance > ESCALATION_THRESHOLDS.depositVariance ($50): SMS + Slack.
-//   5. Persist recon result to deposit_recons.
+// Compares the cash Toast recorded at close against the cash the closing
+// bartender actually counted and dropped. The counted figure comes from the
+// closing-checklist flow (Phase 2) or is entered by hand; until it lands, this
+// lane parks an "awaiting count" row rather than inventing a variance.
 //
-// deposit_records is written by the bar manager (manual Supabase insert or
-// a future Slack slash command). The recon job compares against what Toast says.
+// Thresholds (lib/policies/escalation): >$50 flags Enzo, >$100 escalates.
+// The agent never moves money — it only surfaces the gap.
 
-import { getLastNightToastDigest } from '@/lib/integrations/toast'
-import { sendSms } from '@/lib/integrations/twilio'
-import { postSlackMessage } from '@/lib/integrations/slack'
+import { getToastRollupForDate, previousBusinessDateISO } from '@/lib/integrations/toast'
 import { getSupabaseClient } from '@/lib/integrations/supabase'
 import { ESCALATION_THRESHOLDS } from '@/lib/policies/escalation'
+import { notifyOwner } from '@/lib/gm/notify'
+import { enqueueApproval } from '@/lib/gm/approvalQueue'
+import { logJobRun, type JobStatus } from '@/lib/gm/jobLog'
 
-export async function runDepositRecon() {
-  const digest = await getLastNightToastDigest()
-  const businessDate = digest.businessDate
-  const toastCash = digest.cashSales ?? 0
+export type VarianceLevel = 'ok' | 'flag' | 'escalate'
 
-  const depositRecord = await fetchDepositRecord(businessDate)
-  const depositAmount = depositRecord?.amount ?? null
-  const variance = depositAmount !== null ? Math.abs(toastCash - depositAmount) : null
-  const missing = depositAmount === null
+/** Pure: classify a cash variance against the configured thresholds. */
+export function classifyVariance(variance: number): VarianceLevel {
+  const abs = Math.abs(variance)
+  if (abs > ESCALATION_THRESHOLDS.financialImmediate) return 'escalate'
+  if (abs > ESCALATION_THRESHOLDS.depositVariance) return 'flag'
+  return 'ok'
+}
 
-  const ownerPhone = process.env.OWNER_PHONE
-  const opsChannel = process.env.SLACK_OPS_CHANNEL ?? '#one-fourteen-ops'
+/** Pure: the operator-voice line for a reconciliation result. */
+export function depositLine(date: string, toastCash: number, reported: number | null, variance: number): string {
+  if (reported === null) {
+    return `Deposit recon for ${date}: Toast shows $${toastCash.toFixed(2)} cash. Awaiting the counted drop to reconcile.`
+  }
+  const dir = variance >= 0 ? 'over' : 'short'
+  const level = classifyVariance(variance)
+  if (level === 'ok') {
+    return `Deposit recon for ${date}: drawer reconciled within band ($${Math.abs(variance).toFixed(2)} ${dir}). Nothing to chase.`
+  }
+  const tag = level === 'escalate' ? 'ESCALATION' : 'Flag'
+  return `${tag} — deposit recon ${date}: counted drop is $${Math.abs(variance).toFixed(2)} ${dir} vs Toast cash of $${toastCash.toFixed(2)}. Confirm the count before close of business.`
+}
 
-  let alertSent = false
-  let alertText = ''
+export async function runDepositRecon(opts: { date?: string; reportedCash?: number | null } = {}) {
+  const date = opts.date ?? previousBusinessDateISO()
+  const rollup = await getToastRollupForDate(date)
+  const toastCash = Number((rollup.cashSales ?? 0).toFixed(2))
 
-  if (missing) {
-    alertText = `Deposit recon ${businessDate}: No deposit record found. Toast shows $${toastCash.toFixed(2)} cash. Manager needs to log the deposit.`
-    await postSlackMessage(opsChannel, alertText).catch(() => null)
-    if (ownerPhone) await sendSms(ownerPhone, alertText).catch(() => null)
-    alertSent = true
-  } else if (variance !== null && variance > ESCALATION_THRESHOLDS.depositVariance) {
-    const dir = toastCash > depositAmount! ? 'short' : 'over'
-    alertText = `Deposit recon ${businessDate}: $${variance.toFixed(2)} variance (deposit ${dir}). Toast cash: $${toastCash.toFixed(2)} / Recorded: $${depositAmount!.toFixed(2)}. Flag for review.`
-    await postSlackMessage(opsChannel, alertText).catch(() => null)
-    if (ownerPhone) await sendSms(ownerPhone, alertText).catch(() => null)
-    alertSent = true
+  // Prefer an explicitly passed count; otherwise read one a bartender may have
+  // already filed against this date.
+  let reported = opts.reportedCash ?? null
+  const supabase = getSupabaseClient()
+  if (reported === null && supabase) {
+    const { data } = await supabase
+      .from('deposit_reconciliations')
+      .select('actual_cash_reported')
+      .eq('business_date', date)
+      .not('actual_cash_reported', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (data && typeof data.actual_cash_reported === 'number') reported = data.actual_cash_reported
   }
 
-  await persistRecon({ businessDate, toastCash, depositAmount, variance, alertSent, alertText: alertSent ? alertText : null, toastSource: digest.source })
+  const variance = reported === null ? 0 : Number((reported - toastCash).toFixed(2))
+  const level = reported === null ? 'ok' : classifyVariance(variance)
+  const line = depositLine(date, toastCash, reported, variance)
+
+  // Awaiting a count is informational; a real variance over band reaches Enzo.
+  let dispatch = null
+  let jobStatus: JobStatus = 'noop'
+  if (reported !== null && level !== 'ok') {
+    dispatch = await notifyOwner({ text: line })
+    jobStatus = 'escalated'
+    if (level === 'escalate') {
+      await enqueueApproval({ action: 'escalation', summary: line, payload: { date, toastCash, reported, variance } })
+    }
+  } else if (reported !== null) {
+    dispatch = await notifyOwner({ text: line, smsTo: null }) // reconciled: Slack log only
+    jobStatus = 'sent'
+  }
+
+  if (supabase) {
+    await supabase.from('deposit_reconciliations').insert({
+      business_date: date,
+      variance_amount: reported === null ? null : variance,
+      status: reported === null ? 'awaiting_count' : level,
+      payload_json: { toastCash, reported, variance, level, source: rollup.source },
+      escalated_at: level === 'escalate' ? new Date().toISOString() : null,
+    })
+  }
+
+  await logJobRun({
+    job: 'deposit-recon',
+    status: jobStatus,
+    summary: line,
+    payload: { date, toastCash, reported, variance, level },
+    escalated: level === 'escalate',
+  })
 
   return {
     job: 'deposit-recon',
-    status: missing
-      ? 'missing_deposit'
-      : variance !== null && variance > ESCALATION_THRESHOLDS.depositVariance
-      ? 'variance_alert'
-      : 'clean',
-    businessDate,
+    status: reported === null ? 'awaiting_count' : level,
+    summary: line,
     toastCash,
-    depositAmount,
+    reportedCash: reported,
     variance,
-    threshold: ESCALATION_THRESHOLDS.depositVariance,
-    alertSent,
-    summary: missing
-      ? `No deposit record found for ${businessDate}.`
-      : `Variance $${(variance ?? 0).toFixed(2)} vs $${ESCALATION_THRESHOLDS.depositVariance} threshold.`,
+    dispatch,
   }
-}
-
-async function fetchDepositRecord(businessDate: string): Promise<{ amount: number } | null> {
-  const supabase = getSupabaseClient()
-  if (!supabase) return null
-  const { data, error } = await supabase
-    .from('deposit_records')
-    .select('amount')
-    .eq('business_date', businessDate)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single()
-  if (error || !data) return null
-  return { amount: Number(data.amount) }
-}
-
-async function persistRecon(opts: {
-  businessDate: string
-  toastCash: number
-  depositAmount: number | null
-  variance: number | null
-  alertSent: boolean
-  alertText: string | null
-  toastSource: string
-}) {
-  const supabase = getSupabaseClient()
-  if (!supabase) return
-  await supabase.from('deposit_recons').insert({
-    business_date: opts.businessDate,
-    toast_cash: opts.toastCash,
-    deposit_amount: opts.depositAmount,
-    variance: opts.variance,
-    alert_sent: opts.alertSent,
-    alert_text: opts.alertText,
-    toast_source: opts.toastSource,
-    created_at: new Date().toISOString(),
-  })
 }
