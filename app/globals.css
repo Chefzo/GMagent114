@@ -26,5 +26,37 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 56px; }
 .ok { color: #9bc4a4; border-color: rgba(84,123,94,.45); background: rgba(84,123,94,.12); }
 .warn { color: #e8c78a; border-color: rgba(200,169,110,.45); background: rgba(200,169,110,.12); }
 .list { margin: 0; padding-left: 18px; }
+.muted { color: var(--muted); }
 .footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
-@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .title { font-size: 38px; } }
+
+/* The Pulse — oxblood callout (Enzo's canonical dashboard accent) */
+.pulse { background: linear-gradient(180deg, #5a1717, #3d0f0f); border: 1px solid rgba(200,169,110,.25); border-radius: 18px; padding: 20px 22px; margin-bottom: 22px; }
+.pulse-label { color: var(--gold); font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 8px; }
+.pulse-text { color: var(--text); font-size: 16px; line-height: 1.6; margin: 0; }
+.pulse-text.muted { color: #d8b9b0; }
+.pulse-meta { color: #cfa9a0; font-size: 12px; margin-top: 8px; text-transform: uppercase; letter-spacing: 0.08em; }
+.card h3 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gold); }
+
+/* Lanes */
+.lanes { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.lanes li { display: grid; gap: 2px; }
+.lane-name { color: var(--text); font-size: 14px; font-weight: 700; }
+.lane-desc { color: var(--muted); font-size: 13px; }
+.lane-path { color: var(--gold); font-size: 12px; }
+
+/* Approval queue tags */
+.tag { display: inline-block; padding: 2px 7px; border-radius: 6px; background: rgba(177,80,57,.18); border: 1px solid rgba(177,80,57,.4); color: #e0a18f; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 6px; }
+
+/* Recent runs */
+.runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.run { display: grid; grid-template-columns: 12px 96px 1fr auto; gap: 10px; align-items: baseline; font-size: 13px; }
+.run-job { color: var(--gold); font-weight: 700; }
+.run-summary { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-time { color: var(--muted); font-size: 11px; }
+.run.escalated .run-summary { color: #e0a18f; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); align-self: center; }
+.dot.ready, .dot.sent { background: var(--green); }
+.dot.fallback, .dot.noop { background: var(--gold); }
+.dot.escalated, .dot.error { background: var(--red); }
+
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .title { font-size: 38px; } .run { grid-template-columns: 12px 1fr; } .run-time { display: none; } }

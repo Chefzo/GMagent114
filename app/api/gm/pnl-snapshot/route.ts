@@ -5,7 +5,8 @@ import { checkCronAuth } from '@/lib/policies/cronAuth'
 export async function GET(req: NextRequest) {
   const unauth = checkCronAuth(req)
   if (unauth) return unauth
-  const result = await runPnlSnapshot()
+  const weekEnding = req.nextUrl.searchParams.get('weekEnding') ?? undefined
+  const result = await runPnlSnapshot({ weekEnding })
   return NextResponse.json(result)
 }
 

@@ -10,7 +10,10 @@
     "lint": "eslint .",
     "phase1:check": "node scripts/phase1-check.mjs",
     "pnl": "tsx scripts/run-pnl.mjs",
-    "toast:summary": "tsx scripts/toast-summary.mjs"
+    "toast:summary": "tsx scripts/toast-summary.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx scripts/voice-rules.test.mjs && tsx scripts/lanes.test.mjs && tsx scripts/digest.test.mjs",
+    "smoke": "tsx scripts/smoke-digest.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

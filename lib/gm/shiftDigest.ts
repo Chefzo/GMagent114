@@ -6,59 +6,55 @@
 //   3. Gate the paragraph through assertVoiceRules — bad output is replaced
 //      with the deterministic mock fallback so a hallucinated digest never
 //      ships to Enzo's phone.
-//   4. Dispatch: SMS to OWNER_PHONE via Twilio, post to SLACK_OPS_CHANNEL.
-//   5. Persist the digest + dispatch timestamps in Supabase (shift_digests).
+//   4. Dispatch via notifyOwner: SMS to OWNER_PHONE, post to SLACK_OPS_CHANNEL.
+//   5. Persist the digest in shift_digests + a job_runs heartbeat row.
 //
 // Triggered by Vercel Cron at 07:10 UTC (2am Louisville) and by manual
-// GET/POST to /api/gm/shift-digest with the cron header.
+// GET/POST to /api/gm/shift-digest with the cron secret.
 
 import { getLastNightToastDigest } from '@/lib/integrations/toast'
-import { writeDigestParagraph, assertVoiceRules } from '@/lib/gm/digestWriter'
-import { sendSms } from '@/lib/integrations/twilio'
-import { postSlackMessage } from '@/lib/integrations/slack'
+import { writeDigestParagraph, assertVoiceRules, pullFailedParagraph } from '@/lib/gm/digestWriter'
 import { getSupabaseClient } from '@/lib/integrations/supabase'
-
-type DispatchStatus = { ok: boolean; provider: string; error?: string }
+import { notifyOwner, type NotifyResult } from '@/lib/gm/notify'
+import { renderRundownHtml } from '@/lib/gm/redeBrief'
+import { logJobRun } from '@/lib/gm/jobLog'
 
 export async function runShiftDigest() {
   const digest = await getLastNightToastDigest()
+  const live = digest.source === 'toast_live'
 
-  let paragraph = await writeDigestParagraph(digest)
+  let paragraph = live ? await writeDigestParagraph(digest) : pullFailedParagraph(digest.businessDate)
   const voice = assertVoiceRules(paragraph)
-  if (!voice.ok) {
-    console.warn('[shift-digest] paragraph failed voice rules, regenerating', voice.reasons)
-    // Fall through to the mock writer's deterministic output.
+  if (live && !voice.ok) {
+    console.warn('[shift-digest] paragraph failed voice rules, using mock fallback', voice.reasons)
+    // Deterministic mock never fails the gate, so a bad model output can't ship.
+    const prev = process.env.DIGEST_DRY_RUN
     process.env.DIGEST_DRY_RUN = '1'
     paragraph = await writeDigestParagraph(digest)
-    delete process.env.DIGEST_DRY_RUN
+    if (prev === undefined) delete process.env.DIGEST_DRY_RUN
+    else process.env.DIGEST_DRY_RUN = prev
   }
 
-  const ownerPhone = process.env.OWNER_PHONE
-  const opsChannel = process.env.SLACK_OPS_CHANNEL ?? '#one-fourteen-ops'
-
-  const [smsResult, slackResult] = await Promise.all<DispatchStatus>([
-    ownerPhone
-      ? sendSms(ownerPhone, paragraph)
-      : Promise.resolve({ ok: false, provider: 'stub', error: 'no_owner_phone' }),
-    postSlackMessage(opsChannel, paragraph),
-  ])
-
-  await persist({
-    businessDate: digest.businessDate,
-    summary: paragraph,
-    payload: digest,
-    smsResult,
-    slackResult,
+  const dispatch = await notifyOwner({
+    text: paragraph,
+    redeSubject: `RUNDOWN — ${digest.businessDate}`,
+    redeHtml: renderRundownHtml(digest, paragraph),
   })
+
+  await persist({ businessDate: digest.businessDate, summary: paragraph, payload: digest, dispatch })
+
+  const status = live ? 'ready' : 'fallback'
+  await logJobRun({ job: 'shift-digest', status, summary: paragraph, payload: { source: digest.source, dispatch } })
 
   return {
     job: 'shift-digest',
-    status: digest.source === 'toast_live' ? 'ready' : 'fallback',
+    status,
     voiceOk: voice.ok,
     voiceReasons: voice.reasons,
     summary: paragraph,
-    sms: smsResult,
-    slack: slackResult,
+    sms: dispatch.sms,
+    slack: dispatch.slack,
+    rede: dispatch.rede,
     payload: digest,
   }
 }
@@ -67,8 +63,7 @@ async function persist(opts: {
   businessDate: string
   summary: string
   payload: unknown
-  smsResult: DispatchStatus
-  slackResult: DispatchStatus
+  dispatch: NotifyResult
 }) {
   const supabase = getSupabaseClient()
   if (!supabase) return
@@ -77,7 +72,7 @@ async function persist(opts: {
     business_date: opts.businessDate,
     summary_text: opts.summary,
     payload_json: opts.payload as Record<string, unknown>,
-    sent_sms_at: opts.smsResult.ok ? now : null,
-    sent_slack_at: opts.slackResult.ok ? now : null,
+    sent_sms_at: opts.dispatch.sms.ok ? now : null,
+    sent_slack_at: opts.dispatch.slack.ok ? now : null,
   })
 }

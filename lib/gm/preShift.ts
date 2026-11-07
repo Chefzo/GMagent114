@@ -1,84 +1,88 @@
-// Pre-shift brief job — fires at 4pm Louisville (9pm UTC) daily.
+// Pre-shift brief — the SMS the lead bartender gets a few hours before doors.
 //
-// Pipeline:
-//   1. Pull upcoming Google Calendar events for the next 20 hours.
-//   2. Build a structured brief: tonight's events, times, locations, notes.
-//   3. Post to SLACK_OPS_CHANNEL so the floor team sees it before open.
-//   4. Persist to pre_shift_briefs in Supabase.
+// Inputs: tonight's weather (Open-Meteo), tonight's events (Supabase events
+// table; a Google Calendar feed can replace it later), the drink features to
+// push (gm_config), and the lead bartender on the roster (staff_contacts).
 //
-// SMS to owner intentionally skipped — this brief is for the floor team.
-// Enzo gets the 2am digest instead.
+// Output is a SHORT bartender-voice SMS — no AI voice, no name, no paragraphs.
+// It mirrors into the ops channel and logs to pre_shift_briefs with an ack
+// column a future inbound-SMS webhook can stamp.
 
-import { getUpcomingEvents, type CalendarEvent } from '@/lib/integrations/googleCalendar'
-import { postSlackMessage } from '@/lib/integrations/slack'
+import { getTonightWeather } from '@/lib/integrations/weather'
+import { getUpcomingEvents } from '@/lib/integrations/googleCalendar'
 import { getSupabaseClient } from '@/lib/integrations/supabase'
+import { notifySms, notifyOwner } from '@/lib/gm/notify'
+import { logJobRun } from '@/lib/gm/jobLog'
 
-export async function runPreShiftBrief() {
-  const events = await getUpcomingEvents(20)
-  const brief = buildBrief(events)
-  const opsChannel = process.env.SLACK_OPS_CHANNEL ?? '#one-fourteen-ops'
-
-  const slackResult = await postSlackMessage(opsChannel, brief)
-
-  await persist({ brief, events, slackResult })
-
-  return {
-    job: 'pre-shift',
-    status: events.length > 0 ? 'ready' : 'no_events',
-    eventCount: events.length,
-    summary: brief,
-    slack: slackResult,
-  }
+interface BriefInputs {
+  dateISO: string
+  weather: Awaited<ReturnType<typeof getTonightWeather>>
+  eventNames: string[]
+  features: string[]
 }
 
-function buildBrief(events: CalendarEvent[]): string {
-  const dateStr = new Date().toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    timeZone: 'America/Louisville',
-  })
-
-  if (!events.length) {
-    return `Pre-shift brief — ${dateStr}\n\nNo calendar events tonight. Standard open. Check res book manually.`
+/** Pure: assemble the terse bartender SMS. Short clauses, no fluff. */
+export function buildPreShiftSms(i: BriefInputs): string {
+  const parts: string[] = ['Pre-shift —']
+  if (i.eventNames.length) parts.push(`Tonight: ${i.eventNames.join(', ')}.`)
+  if (i.weather) {
+    const rain = i.weather.precipChancePct >= 40 ? `, ${i.weather.precipChancePct}% rain` : ''
+    parts.push(`${i.weather.highF}/${i.weather.lowF}F, ${i.weather.summary}${rain}.`)
   }
-
-  const lines = [`Pre-shift brief — ${dateStr}`, '']
-
-  for (const ev of events) {
-    const startTime = ev.allDay
-      ? 'All day'
-      : new Date(ev.start).toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit',
-          timeZone: 'America/Louisville',
-        })
-    lines.push(ev.location ? `• ${startTime} — ${ev.title} @ ${ev.location}` : `• ${startTime} — ${ev.title}`)
-    if (ev.description) {
-      const firstLine = ev.description.split('\n')[0].trim().slice(0, 120)
-      if (firstLine) lines.push(`  ${firstLine}`)
-    }
-  }
-
-  lines.push('')
-  lines.push('Confirm pars, check ice, staff in 15 before open.')
-
-  return lines.join('\n')
+  if (i.features.length) parts.push(`Push: ${i.features.join(', ')}.`)
+  parts.push('Reply 👍 to confirm.')
+  return parts.join(' ')
 }
 
-async function persist(opts: {
-  brief: string
-  events: CalendarEvent[]
-  slackResult: { ok: boolean; provider: string; error?: string }
-}) {
+export async function runPreShiftBrief(opts: { date?: string } = {}) {
+  const dateISO = opts.date ?? new Date().toISOString().slice(0, 10)
   const supabase = getSupabaseClient()
-  if (!supabase) return
-  const now = new Date().toISOString()
-  await supabase.from('pre_shift_briefs').insert({
-    brief_date: now.slice(0, 10),
-    brief_text: opts.brief,
-    event_count: opts.events.length,
-    events_json: opts.events as unknown as Record<string, unknown>[],
-    sent_slack_at: opts.slackResult.ok ? now : null,
-  })
+
+  const [weather, calendarEvents] = await Promise.all([getTonightWeather(), getUpcomingEvents()])
+
+  // Tonight's events: Google Calendar (empty unless GOOGLE_* is set) plus the events table.
+  let eventNames: string[] = calendarEvents.map((e) => e.title).filter(Boolean)
+  let features: string[] = []
+  type Lead = { id?: number; name?: string; phone?: string }
+  let lead: Lead | null = null
+
+  if (supabase) {
+    const { data: evs } = await supabase.from('events').select('name').eq('event_date', dateISO).neq('status', 'cancelled')
+    eventNames = [...eventNames, ...((evs ?? []).map((e) => e.name as string))]
+
+    const { data: feat } = await supabase.from('gm_config').select('value_json').eq('key', 'drink_features').maybeSingle()
+    const fv = feat?.value_json as { items?: string[] } | string[] | undefined
+    if (Array.isArray(fv)) features = fv
+    else if (fv?.items) features = fv.items
+
+    const { data: contacts } = await supabase
+      .from('staff_contacts')
+      .select('id, name, phone, role')
+      .eq('active', true)
+      .eq('sms_enabled', true)
+      .in('role', ['lead', 'lead_bartender'])
+      .limit(1)
+    if (contacts?.length) lead = contacts[0] as Lead
+  }
+
+  const sms = buildPreShiftSms({ dateISO, weather, eventNames, features })
+
+  // SMS the lead if we have one; always mirror into the ops channel.
+  const smsResult = lead?.phone ? await notifySms(lead.phone, sms) : { ok: false, provider: 'skipped', error: 'no_lead' }
+  const mirror = await notifyOwner({ text: `[pre-shift ${dateISO}] ${sms}`, smsTo: null })
+
+  if (supabase) {
+    await supabase.from('pre_shift_briefs').insert({
+      shift_date: dateISO,
+      summary_text: sms,
+      status: smsResult.ok ? 'sent' : 'undelivered',
+      sent_at: smsResult.ok ? new Date().toISOString() : null,
+      payload_json: { weather, eventNames, features, leadId: lead?.id ?? null },
+    })
+  }
+
+  const status = smsResult.ok ? 'sent' : 'noop'
+  await logJobRun({ job: 'pre-shift', status, summary: sms, payload: { lead: lead?.name ?? null, smsResult, mirror } })
+
+  return { job: 'pre-shift', status, summary: sms, lead: lead?.name ?? null, sms: smsResult, slack: mirror.slack }
 }

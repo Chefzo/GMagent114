@@ -1,107 +1,109 @@
-// Permit reminder sweep — fires daily at 8am Louisville.
+// License + permit reminder engine.
 //
-// Reads permit_items table in Supabase. Each row:
-//   name         TEXT  — e.g. "Liquor License", "Health Permit"
-//   expiry_date  DATE  — YYYY-MM-DD
-//   notes        TEXT  — optional renewal instructions
-//   active       BOOL  — soft-delete flag
+// Tracked items live in the permits_licenses table (seeded with the KY ABC,
+// food, BMI/ASCAP, liquor-liability, health, and fire-inspection set). Each
+// daily sweep computes days-to-renewal and fires a reminder as each item
+// crosses the 60 / 30 / 7-day marks. Per spec the 7-day notice is an
+// escalation to Enzo by SMS; 60 and 30 are awareness posts to the ops channel.
 //
-// Tiered alert logic:
-//   Within PERMIT_ALERT_DAYS (default 30): Slack notice
-//   Within 7 days: Slack + SMS warning
-//   Expired or today: Slack + SMS urgent escalation
+// permit_reminders records every fired tier so a daily cron never double-sends.
 
-import { sendSms } from '@/lib/integrations/twilio'
-import { postSlackMessage } from '@/lib/integrations/slack'
 import { getSupabaseClient } from '@/lib/integrations/supabase'
+import { notifyOwner } from '@/lib/gm/notify'
+import { logJobRun } from '@/lib/gm/jobLog'
 
-const ALERT_DAYS = Number(process.env.PERMIT_ALERT_DAYS ?? 30)
-const URGENT_DAYS = 7
-const TABLE = process.env.PERMITS_TABLE ?? 'permit_items'
+export const REMINDER_TIERS = [60, 30, 7] as const
+export type ReminderTier = (typeof REMINDER_TIERS)[number]
 
-interface PermitItem {
-  id: string
-  name: string
-  expiry_date: string
-  notes: string | null
-}
-
-export async function runPermitReminderSweep() {
-  const permits = await fetchActivePermits()
-
-  if (!permits.length) {
-    return {
-      job: 'permits',
-      status: 'no_permits',
-      summary: 'No active permit records in Supabase. Add rows to permit_items table.',
-      alerts: [],
-    }
-  }
-
-  const today = todayISO()
-  const alerts: Array<{ name: string; expiry: string; level: 'urgent' | 'warning' | 'notice'; sent: boolean }> = []
-  const ownerPhone = process.env.OWNER_PHONE
-  const opsChannel = process.env.SLACK_OPS_CHANNEL ?? '#one-fourteen-ops'
-
-  for (const permit of permits) {
-    const daysLeft = daysBetween(today, permit.expiry_date)
-    if (daysLeft > ALERT_DAYS) continue
-
-    const level: 'urgent' | 'warning' | 'notice' =
-      daysLeft <= 0 ? 'urgent' : daysLeft <= URGENT_DAYS ? 'warning' : 'notice'
-
-    const prefix =
-      daysLeft <= 0
-        ? `URGENT — EXPIRED: ${permit.name} expired on ${permit.expiry_date}.`
-        : daysLeft <= URGENT_DAYS
-        ? `URGENT — ${permit.name} expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${permit.expiry_date}).`
-        : `Reminder: ${permit.name} expires in ${daysLeft} days (${permit.expiry_date}).`
-
-    const msg = permit.notes ? `${prefix} Notes: ${permit.notes}` : prefix
-
-    await postSlackMessage(opsChannel, msg).catch(() => null)
-    if (level !== 'notice' && ownerPhone) await sendSms(ownerPhone, msg).catch(() => null)
-
-    alerts.push({ name: permit.name, expiry: permit.expiry_date, level, sent: true })
-  }
-
-  const urgentCount = alerts.filter(a => a.level === 'urgent').length
-  const warningCount = alerts.filter(a => a.level === 'warning').length
-
-  return {
-    job: 'permits',
-    status:
-      urgentCount > 0 ? 'urgent' : warningCount > 0 ? 'warning' : alerts.length > 0 ? 'notice' : 'clear',
-    permitCount: permits.length,
-    alerts,
-    summary:
-      alerts.length === 0
-        ? `All ${permits.length} permits clear — nothing expiring within ${ALERT_DAYS} days.`
-        : `${alerts.length} permit alert${alerts.length === 1 ? '' : 's'} dispatched (${urgentCount} urgent, ${warningCount} warning).`,
-  }
-}
-
-async function fetchActivePermits(): Promise<PermitItem[]> {
-  const supabase = getSupabaseClient()
-  if (!supabase) return []
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select('id, name, expiry_date, notes')
-    .eq('active', true)
-    .order('expiry_date', { ascending: true })
-  if (error) {
-    console.error('[permits] Supabase fetch failed:', error.message)
-    return []
-  }
-  return (data ?? []) as PermitItem[]
-}
-
-function todayISO(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Louisville' })
-}
-
-function daysBetween(from: string, to: string): number {
-  const a = new Date(from + 'T12:00:00').getTime()
-  const b = new Date(to + 'T12:00:00').getTime()
+/** Pure: whole days from `todayISO` until `renewalISO` (negative if past due). */
+export function daysUntil(renewalISO: string, todayISO: string): number {
+  const a = Date.parse(`${todayISO}T00:00:00Z`)
+  const b = Date.parse(`${renewalISO}T00:00:00Z`)
   return Math.round((b - a) / 86_400_000)
+}
+
+/**
+ * Pure: the most-urgent reminder tier that is due (days <= tier) and not yet
+ * sent. Returns null when nothing new is due. Past-due items return the 7-day
+ * tier so they keep escalating until renewed.
+ */
+export function dueTier(days: number, alreadySent: number[]): ReminderTier | null {
+  const due = REMINDER_TIERS.filter((t) => days <= t && !alreadySent.includes(t))
+  if (!due.length) return null
+  return Math.min(...due) as ReminderTier
+}
+
+function permitLine(name: string, authority: string | null, days: number, tier: ReminderTier): string {
+  const auth = authority ? ` (${authority})` : ''
+  if (days < 0) return `ESCALATION — ${name}${auth} renewal is ${Math.abs(days)} days PAST DUE. This is a license-at-risk item.`
+  if (tier === 7) return `ESCALATION — ${name}${auth} renews in ${days} days. Lock the renewal this week.`
+  return `Permit reminder: ${name}${auth} renews in ${days} days.`
+}
+
+export async function runPermitReminderSweep(opts: { today?: string } = {}) {
+  const today = opts.today ?? new Date().toISOString().slice(0, 10)
+  const supabase = getSupabaseClient()
+
+  if (!supabase) {
+    const summary = 'Permit sweep ran with no Supabase config — nothing to check.'
+    await logJobRun({ job: 'permits', status: 'noop', summary })
+    return { job: 'permits', status: 'noop', summary, fired: [] }
+  }
+
+  const { data: permits } = await supabase
+    .from('permits_licenses')
+    .select('id, name, authority, renewal_date, status')
+    .neq('status', 'retired')
+  const { data: sentRows } = await supabase.from('permit_reminders').select('permit_id, days_before')
+
+  const sentByPermit = new Map<number, number[]>()
+  for (const row of sentRows ?? []) {
+    const arr = sentByPermit.get(row.permit_id as number) ?? []
+    arr.push(row.days_before as number)
+    sentByPermit.set(row.permit_id as number, arr)
+  }
+
+  const fired: Array<{ name: string; tier: ReminderTier; days: number; escalated: boolean }> = []
+  const nowIso = new Date().toISOString()
+
+  for (const p of permits ?? []) {
+    if (!p.renewal_date) continue
+    const days = daysUntil(p.renewal_date as string, today)
+    const alreadySent = sentByPermit.get(p.id as number) ?? []
+    const tier = dueTier(days, alreadySent)
+    if (tier === null) continue
+
+    const line = permitLine(p.name as string, (p.authority as string) ?? null, days, tier)
+    const escalated = tier === 7 || days < 0
+    await notifyOwner({ text: line, smsTo: escalated ? undefined : null })
+
+    // Record this tier plus any larger overdue tiers so we don't backfill noise.
+    const toRecord = REMINDER_TIERS.filter((t) => days <= t && !alreadySent.includes(t))
+    await supabase
+      .from('permit_reminders')
+      .insert(
+        toRecord.map((t) => ({
+          permit_id: p.id,
+          days_before: t,
+          scheduled_for: p.renewal_date,
+          sent_at: nowIso,
+          status: 'sent',
+        })),
+      )
+
+    fired.push({ name: p.name as string, tier, days, escalated })
+  }
+
+  const summary = fired.length
+    ? `Fired ${fired.length} permit reminder(s): ${fired.map((f) => `${f.name} (${f.days}d)`).join(', ')}.`
+    : 'Permit sweep clean — no renewals inside the 60-day window.'
+  await logJobRun({
+    job: 'permits',
+    status: fired.length ? 'sent' : 'noop',
+    summary,
+    payload: { fired },
+    escalated: fired.some((f) => f.escalated),
+  })
+
+  return { job: 'permits', status: fired.length ? 'sent' : 'clean', summary, fired }
 }

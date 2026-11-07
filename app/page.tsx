@@ -1,54 +1,144 @@
-const endpoints = [
-  ['/api/gm/shift-digest', 'Nightly Toast digest scaffold'],
-  ['/api/gm/pre-shift', 'Pre-shift SMS brief scaffold'],
-  ['/api/gm/deposit-recon', 'Deposit variance scaffold'],
-  ['/api/gm/pnl-snapshot', 'Weekly P&L snapshot scaffold'],
-  ['/api/gm/permits', 'Permit reminder scaffold'],
-  ['/api/gm/event-lifecycle', 'Event lifecycle scaffold'],
+// Mission Control — the operator control plane. Server component: reads the
+// live job log, latest digest, approval queue, and upcoming permits/events
+// straight from Supabase on each request. Laid out in the operator-dashboard
+// shape (Today / Pulse / Open loops / This week / Approval queue).
+
+import { loadMissionControl } from '@/lib/gm/missionControl'
+
+export const dynamic = 'force-dynamic'
+
+const LANES: Array<[string, string, string]> = [
+  ['Nightly digest', '/api/gm/shift-digest', '2am EOD Toast read'],
+  ['Pre-shift brief', '/api/gm/pre-shift', 'Lead-bartender SMS before doors'],
+  ['Deposit recon', '/api/gm/deposit-recon', 'Counted drop vs Toast cash'],
+  ['Weekly P&L', '/api/gm/pnl-snapshot', 'Sunday operator read'],
+  ['Permits', '/api/gm/permits', '60 / 30 / 7-day renewals'],
+  ['Event lifecycle', '/api/gm/event-lifecycle', '14-day / day-of / recap'],
 ]
 
-export default function HomePage() {
+function fmtDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  } catch {
+    return iso
+  }
+}
+
+function fmtTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  } catch {
+    return iso
+  }
+}
+
+export default async function MissionControl() {
+  const data = await loadMissionControl()
+
   return (
     <main>
       <section className="hero">
-        <div className="kicker">One Fourteen Virtual GM · Phase 1</div>
-        <h1 className="title">GMagent114</h1>
+        <div className="kicker">One Fourteen · Mission Control 🥃</div>
+        <h1 className="title">Virtual GM — Phase 1</h1>
         <p className="copy">
-          Phase 1 scaffold for the Virtual GM cadence engine. This lane is about recurring bar ops: nightly digest, pre-shift brief, deposit recon, weekly P&amp;L, permits, and event reminders.
+          The GM-cadence engine: nightly digest, pre-shift brief, deposit recon, weekly P&amp;L, permits, and event
+          lifecycle. Nothing public, financial, legal, or staff-sensitive ships without an approval gate.
         </p>
-        <div className="status ok">Scaffold live</div>
+        <div className={`status ${data.connected ? 'ok' : 'warn'}`}>
+          {data.connected ? 'Supabase connected · live' : 'Supabase not configured · preview mode'}
+        </div>
+      </section>
+
+      {/* The Pulse — latest digest */}
+      <section className="pulse">
+        <div className="pulse-label">Last digest</div>
+        {data.latestDigest ? (
+          <>
+            <p className="pulse-text">{data.latestDigest.summary_text}</p>
+            <div className="pulse-meta">business date {data.latestDigest.business_date}</div>
+          </>
+        ) : (
+          <p className="pulse-text muted">No digest logged yet. Fire one at <code>/api/gm/shift-digest</code>.</p>
+        )}
       </section>
 
       <section className="grid">
+        {/* Open loops — lanes */}
         <article className="card">
-          <h2>Phase 1 lanes</h2>
-          <ul className="list">
-            <li>Toast end-of-shift digest</li>
-            <li>Pre-shift bartender brief</li>
-            <li>Deposit reconciliation</li>
-            <li>Weekly P&amp;L snapshot</li>
-            <li>Permit reminder engine</li>
-            <li>Event lifecycle reminders</li>
-          </ul>
-        </article>
-
-        <article className="card">
-          <h2>API stubs</h2>
-          <ul className="list">
-            {endpoints.map(([path, label]) => (
-              <li key={path}><code>{path}</code> — {label}</li>
+          <h2>Lanes</h2>
+          <ul className="lanes">
+            {LANES.map(([name, path, desc]) => (
+              <li key={path}>
+                <span className="lane-name">{name}</span>
+                <span className="lane-desc">{desc}</span>
+                <code className="lane-path">{path}</code>
+              </li>
             ))}
           </ul>
         </article>
 
+        {/* Approval queue */}
         <article className="card">
-          <h2>Integration contracts</h2>
-          <p>All external systems are stubbed behind lib/integrations so we can wire real Toast, Supabase, Twilio, Slack, and Google Calendar later without rewriting the job logic.</p>
+          <h2>Approval queue {data.pendingApprovals.length ? `(${data.pendingApprovals.length})` : ''}</h2>
+          {data.pendingApprovals.length ? (
+            <ul className="list">
+              {data.pendingApprovals.map((a, i) => (
+                <li key={i}>
+                  <span className="tag">{a.action}</span> {a.summary}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">Nothing waiting on your signoff.</p>
+          )}
         </article>
 
+        {/* This week — permits + events */}
         <article className="card">
-          <h2>Next build move</h2>
-          <p>Start with the nightly Toast digest job. It has the highest leverage and the cleanest operator output.</p>
+          <h2>This week &amp; ahead</h2>
+          <h3>Permits</h3>
+          {data.upcomingPermits.length ? (
+            <ul className="list">
+              {data.upcomingPermits.map((p, i) => (
+                <li key={i}>
+                  {p.name} — <span className="muted">{fmtDate(p.renewal_date)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No upcoming renewals.</p>
+          )}
+          <h3>Events</h3>
+          {data.upcomingEvents.length ? (
+            <ul className="list">
+              {data.upcomingEvents.map((e, i) => (
+                <li key={i}>
+                  {e.name} — <span className="muted">{fmtDate(e.event_date)}{e.headcount ? ` · ${e.headcount}` : ''}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No events on the books.</p>
+          )}
+        </article>
+
+        {/* Recent job runs */}
+        <article className="card">
+          <h2>Recent runs</h2>
+          {data.recentRuns.length ? (
+            <ul className="runs">
+              {data.recentRuns.map((r, i) => (
+                <li key={i} className={r.escalated ? 'run escalated' : 'run'}>
+                  <span className={`dot ${r.status}`} />
+                  <span className="run-job">{r.job}</span>
+                  <span className="run-summary">{r.summary}</span>
+                  <span className="run-time">{fmtTime(r.created_at)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No runs logged yet.</p>
+          )}
         </article>
       </section>
 

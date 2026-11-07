@@ -159,11 +159,66 @@ function sumDiscounts(applied: unknown) {
   return applied.reduce((sum: number, discount) => sum + numberOrZero((discount as Record<string, unknown> | null)?.discountAmount), 0)
 }
 
-// Hour on the venue clock (0-23), or null for a missing or bad timestamp.
-function venueHour(iso: string) {
-  const date = new Date(iso)
-  if (!iso || Number.isNaN(date.getTime())) return null
-  return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(date))
+// The venue runs on Eastern time; a business "night" spans 5am–5am. Toast
+// timestamps are UTC/offset-aware, but the server runs UTC on Vercel, so a plain
+// Date#getHours() buckets by UTC and misattributes late-night sales.
+const VENUE_TZ = 'America/New_York'
+
+/** Hour-of-day (0–23) for an ISO timestamp in the venue's timezone, or null. */
+function venueHour(iso: string): number | null {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: VENUE_TZ, hour: 'numeric', hour12: false }).formatToParts(d)
+  const h = parts.find((p) => p.type === 'hour')?.value
+  if (h == null) return null
+  const n = Number(h)
+  if (!Number.isFinite(n)) return null
+  return n === 24 ? 0 : n // some ICU builds render midnight as "24"
+}
+
+// Overtime is paid at 1.5× base wage. Toast carries the wage on each entry, so
+// labor cost is computed straight from time entries — no employee/job lookup.
+const OVERTIME_MULTIPLIER = 1.5
+
+/** Pull all time entries for a single Toast business date (yyyy-mm-dd). */
+async function getTimeEntriesForDate(token: string, date: string) {
+  const config = getToastConfig()
+  const businessDate = date.replaceAll('-', '') // Toast wants yyyymmdd
+  const res = await httpsReq<Array<Record<string, unknown>>>({
+    hostname: 'ws-api.toasttab.com',
+    path: `/labor/v1/timeEntries?businessDate=${businessDate}`,
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Toast-Restaurant-External-ID': config.restaurantGuid,
+    },
+  })
+  if (res.status !== 200 || !Array.isArray(res.body)) return []
+  return res.body
+}
+
+/** Roll time entries into labor cost + hours. Skips deleted entries. */
+function summarizeLabor(entries: Array<Record<string, unknown>>) {
+  let laborCost = 0
+  let regularHours = 0
+  let overtimeHours = 0
+
+  for (const entry of entries) {
+    if (entry.deleted) continue
+    const wage = numberOrZero(entry.hourlyWage)
+    const reg = numberOrZero(entry.regularHours)
+    const ot = numberOrZero(entry.overtimeHours)
+    regularHours += reg
+    overtimeHours += ot
+    laborCost += reg * wage + ot * wage * OVERTIME_MULTIPLIER
+  }
+
+  return {
+    laborCost: Number(laborCost.toFixed(2)),
+    laborHours: Number((regularHours + overtimeHours).toFixed(2)),
+    regularHours: Number(regularHours.toFixed(2)),
+    overtimeHours: Number(overtimeHours.toFixed(2)),
+  }
 }
 
 export function summarizeOrders(orders: Array<Record<string, unknown>>) {
@@ -204,13 +259,15 @@ export function summarizeOrders(orders: Array<Record<string, unknown>>) {
         else cardSales += amount
       }
 
-      const hour = venueHour(String(check.openedDate || order.openedDate || ''))
-      if (hour !== null) {
+      const openedAt = String(check.openedDate || order.openedDate || '')
+      if (openedAt) {
+        const hour = venueHour(openedAt)
         const amount = numberOrZero(check.amount)
-        // The business day runs 5am to 5am, so 0-4 is after midnight.
-        if (hour < 5) hourlyBuckets.after12am += amount
-        else if (hour < 22) hourlyBuckets.before10pm += amount
-        else hourlyBuckets.tenTo12am += amount
+        if (hour != null) {
+          if (hour >= 22) hourlyBuckets.tenTo12am += amount // 10pm–midnight
+          else if (hour < 5) hourlyBuckets.after12am += amount // midnight–5am (same business night)
+          else hourlyBuckets.before10pm += amount // 5am–10pm
+        }
       }
 
       const selections = Array.isArray(check.selections) ? check.selections as Array<Record<string, unknown>> : []
@@ -277,44 +334,146 @@ function getPreviousBusinessDateISO() {
   return d.toISOString().slice(0, 10)
 }
 
-export async function getLastNightToastDigest() {
-  const date = getPreviousBusinessDateISO()
-  const fallbackDaily = readFallbackDailySnapshot()
-  const fallbackLabor = readFallbackWeeklyLabor()
+export type ToastRollup = ReturnType<typeof summarizeOrders> & {
+  businessDate: string
+  source: 'toast_live' | 'toast_fallback_file'
+  laborPct: number | null
+  laborCost: number | null
+  laborHours: number | null
+  flags: string[]
+}
 
+/** ISO date for "yesterday" (the digest's business date). */
+export function previousBusinessDateISO() {
+  return getPreviousBusinessDateISO()
+}
+
+/**
+ * Live Toast roll-up for a single business date — the reusable core. The digest
+ * asks for yesterday, deposit recon asks for the same close, and the weekly P&L
+ * loops this over seven days. On any failure it returns a zero-filled fallback
+ * so a lane can still run and report "data missing" rather than throw.
+ */
+export async function getToastRollupForDate(date: string): Promise<ToastRollup> {
+  const fallbackLabor = readFallbackWeeklyLabor()
   try {
     const token = await toastAuth()
     if (!token) throw new Error('Toast auth not configured')
     const orders = await getOrdersForDate(token, date)
     if (!orders.length) throw new Error('No Toast orders returned')
-    const summary = summarizeOrders(orders)
+    const sales = summarizeOrders(orders)
+
+    // Labor is best-effort: sales already succeeded, so a labor failure leaves
+    // the day live with labor null rather than dropping it to the fallback.
+    let laborCost: number | null = fallbackLabor.laborCost
+    let laborHours: number | null = null
+    const flags: string[] = []
+    try {
+      const entries = await getTimeEntriesForDate(token, date)
+      const labor = summarizeLabor(entries)
+      laborCost = labor.laborCost
+      laborHours = labor.laborHours
+    } catch {
+      flags.push('Labor pull failed')
+    }
+    const laborPct = laborCost != null && sales.netSales > 0
+      ? Number(((laborCost / sales.netSales) * 100).toFixed(1))
+      : null
+
     return {
       businessDate: date,
       source: 'toast_live',
-      ...summary,
-      laborPct: fallbackLabor.laborPct,
-      laborCost: fallbackLabor.laborCost,
-      flags: [],
+      ...sales,
+      laborPct,
+      laborCost,
+      laborHours,
+      flags,
     }
   } catch {
+    const fallbackDaily = readFallbackDailySnapshot()
     return {
       businessDate: fallbackDaily?.date || date,
       source: 'toast_fallback_file',
-      netSales: fallbackDaily?.netSales ?? null,
-      totalOrders: fallbackDaily?.totalOrders ?? null,
-      totalGuests: fallbackDaily?.totalGuests ?? null,
-      aov: fallbackDaily?.aov ?? null,
-      cashSales: fallbackDaily?.cashSales ?? null,
-      cardSales: fallbackDaily?.cardSales ?? null,
-      cashPct: fallbackDaily?.cashPct ?? null,
-      voidAmount: fallbackDaily?.voidAmount ?? null,
-      voidPct: fallbackDaily?.voidPct ?? null,
-      discountAmount: fallbackDaily?.discountAmount ?? null,
-      dayparts: fallbackDaily?.dayparts || null,
+      netSales: fallbackDaily?.netSales ?? 0,
+      totalOrders: fallbackDaily?.totalOrders ?? 0,
+      totalGuests: fallbackDaily?.totalGuests ?? 0,
+      aov: fallbackDaily?.aov ?? 0,
+      cashSales: fallbackDaily?.cashSales ?? 0,
+      cardSales: fallbackDaily?.cardSales ?? 0,
+      cashPct: fallbackDaily?.cashPct ?? 0,
+      voidAmount: fallbackDaily?.voidAmount ?? 0,
+      voidPct: fallbackDaily?.voidPct ?? 0,
+      discountAmount: fallbackDaily?.discountAmount ?? 0,
+      dayparts: {
+        before10pm: fallbackDaily?.dayparts?.before10pm ?? 0,
+        tenTo12am: fallbackDaily?.dayparts?.tenTo12am ?? 0,
+        after12am: fallbackDaily?.dayparts?.after12am ?? 0,
+      },
       topPours: [],
       laborPct: fallbackLabor.laborPct,
       laborCost: fallbackLabor.laborCost,
+      laborHours: null,
       flags: fallbackDaily?.flags || ['Using fallback daily Toast file'],
     }
+  }
+}
+
+export async function getLastNightToastDigest(): Promise<ToastRollup> {
+  return getToastRollupForDate(getPreviousBusinessDateISO())
+}
+
+/** Sum N consecutive days ending on `endDate` (inclusive) into a week roll-up. */
+export async function getToastWeekRollup(endDate: string, days = 7) {
+  const dates: string[] = []
+  const end = new Date(`${endDate}T12:00:00Z`)
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(end)
+    d.setUTCDate(d.getUTCDate() - i)
+    dates.push(d.toISOString().slice(0, 10))
+  }
+
+  const daily = await Promise.all(dates.map((d) => getToastRollupForDate(d)))
+  const live = daily.filter((d) => d.source === 'toast_live')
+
+  const netSales = Number(daily.reduce((s, d) => s + (d.netSales ?? 0), 0).toFixed(2))
+  const totalGuests = daily.reduce((s, d) => s + (d.totalGuests ?? 0), 0)
+
+  // Labor across the week — sum only the days that actually returned labor, so a
+  // single missing day gives a partial cost rather than a null week.
+  const laborDays = daily.filter((d) => d.laborCost != null)
+  const laborCost = laborDays.length
+    ? Number(laborDays.reduce((s, d) => s + (d.laborCost ?? 0), 0).toFixed(2))
+    : null
+  const laborHours = laborDays.length
+    ? Number(laborDays.reduce((s, d) => s + (d.laborHours ?? 0), 0).toFixed(2))
+    : null
+  const laborPct = laborCost != null && netSales > 0
+    ? Number(((laborCost / netSales) * 100).toFixed(1))
+    : null
+
+  // Top movers across the week by quantity.
+  const itemMap = new Map<string, number>()
+  for (const d of daily) {
+    for (const p of d.topPours ?? []) itemMap.set(p.name, (itemMap.get(p.name) ?? 0) + p.qty)
+  }
+  const topMovers = [...itemMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, qty]) => ({ name, qty }))
+
+  return {
+    weekEnding: endDate,
+    days: dates.length,
+    daysWithData: live.length,
+    source: live.length ? ('toast_live' as const) : ('toast_fallback_file' as const),
+    netSales,
+    totalGuests,
+    avgDailyNet: Number((netSales / dates.length).toFixed(2)),
+    laborCost,
+    laborHours,
+    laborPct,
+    daysWithLabor: laborDays.length,
+    topMovers,
+    daily: daily.map((d) => ({ businessDate: d.businessDate, netSales: d.netSales, totalGuests: d.totalGuests, laborCost: d.laborCost })),
   }
 }

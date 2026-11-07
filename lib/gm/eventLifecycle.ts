@@ -1,108 +1,127 @@
-// Event lifecycle sweep — fires daily at 9am Louisville.
+// Event lifecycle reminder engine.
 //
-// Scans Google Calendar events in the next 14 days and fires milestone
-// reminders at 14, 7, 3, 1, and 0 days out:
+// Events live in the events table (config-first; a Google Calendar feed can
+// replace it later without touching this logic). A daily sweep walks each
+// upcoming event and fires the milestone that lands today:
 //
-//   14 days: Confirm headcount and deposit.
-//    7 days: Confirm staffing, prep, and any required permits.
-//    3 days: Final confirm with client. Send comms to floor team.
-//    1 day:  Event tomorrow — verify setup, pars, and staff schedule.
-//    0 days: Event today. Pre-shift brief with floor by 4pm.
+//   14 days out   — readiness check: BEO signed, deposit collected, F&B
+//                    minimum confirmed, staffing locked. Any gap escalates.
+//   day of (T-0)   — bartender brief: timeline, headcount, F&B minimum, POC.
+//   1 day after    — recap prompt: actuals vs minimum, tip pool, lessons.
 //
-// Deduplication: each (event_id, milestone_days) pair is recorded in
-// event_milestones so the same alert never fires twice.
-// Escalation: Slack for all milestones; SMS only for day-of and day-before.
+// event_runs records each fired phase so the daily cron never repeats one.
 
-import { getUpcomingEvents, type CalendarEvent } from '@/lib/integrations/googleCalendar'
-import { sendSms } from '@/lib/integrations/twilio'
-import { postSlackMessage } from '@/lib/integrations/slack'
 import { getSupabaseClient } from '@/lib/integrations/supabase'
+import { notifyOwner } from '@/lib/gm/notify'
+import { enqueueApproval } from '@/lib/gm/approvalQueue'
+import { logJobRun } from '@/lib/gm/jobLog'
 
-const MILESTONES = [14, 7, 3, 1, 0] as const
-type MilestoneDays = (typeof MILESTONES)[number]
+export type EventPhase = '14_day' | 'day_of' | '24_hour_recap'
 
-const MILESTONE_COPY: Record<MilestoneDays, string> = {
-  14: 'Confirm headcount and deposit.',
-  7: 'Confirm staffing, prep, and any required permits.',
-  3: 'Final confirm with client. Send comms to floor team.',
-  1: 'Event tomorrow — verify setup, pars, and staff schedule.',
-  0: 'Event today. Pre-shift brief with floor by 4pm.',
+export interface EventRow {
+  event_key: string
+  name: string
+  event_date: string
+  headcount?: number | null
+  contact?: string | null
+  beo_signed?: boolean | null
+  deposit_collected?: boolean | null
+  fnb_minimum?: number | null
+  staffing_locked?: boolean | null
 }
 
-export async function runEventLifecycleSweep() {
-  const events = await getUpcomingEvents(15 * 24)
-  const today = todayISO()
+/** Pure: which lifecycle phase (if any) lands on `today` for an event. */
+export function eventPhase(eventDateISO: string, todayISO: string): EventPhase | null {
+  const a = Date.parse(`${todayISO}T00:00:00Z`)
+  const b = Date.parse(`${eventDateISO.slice(0, 10)}T00:00:00Z`)
+  const days = Math.round((b - a) / 86_400_000)
+  if (days === 14) return '14_day'
+  if (days === 0) return 'day_of'
+  if (days === -1) return '24_hour_recap'
+  return null
+}
 
-  const fired: Array<{ eventId: string; title: string; milestone: number; sent: boolean }> = []
+/** Pure: the readiness gaps that should block an event 14 days out. */
+export function missingMilestones(e: EventRow): string[] {
+  const gaps: string[] = []
+  if (!e.beo_signed) gaps.push('BEO unsigned')
+  if (!e.deposit_collected) gaps.push('deposit not collected')
+  if (e.fnb_minimum == null) gaps.push('F&B minimum not set')
+  if (!e.staffing_locked) gaps.push('staffing not locked')
+  return gaps
+}
 
-  for (const event of events) {
-    const eventDate = event.start.slice(0, 10)
-    const daysAway = daysBetween(today, eventDate)
-    const matchedMilestone = MILESTONES.find(m => m === daysAway)
-    if (matchedMilestone === undefined) continue
-
-    const alreadyFired = await checkMilestoneFired(event.id, matchedMilestone)
-    if (alreadyFired) continue
-
-    const msg = `Event lifecycle — ${event.title} (${eventDate}): ${MILESTONE_COPY[matchedMilestone]}`
-    const opsChannel = process.env.SLACK_OPS_CHANNEL ?? '#one-fourteen-ops'
-
-    await postSlackMessage(opsChannel, msg).catch(() => null)
-
-    const ownerPhone = process.env.OWNER_PHONE
-    if ((matchedMilestone === 0 || matchedMilestone === 1) && ownerPhone) {
-      await sendSms(ownerPhone, msg).catch(() => null)
+/** Pure: the operator/bartender line for a given phase. */
+export function eventLine(e: EventRow, phase: EventPhase): { text: string; escalate: boolean } {
+  const head = e.headcount ? `${e.headcount} guests` : 'headcount TBD'
+  switch (phase) {
+    case '14_day': {
+      const gaps = missingMilestones(e)
+      if (gaps.length) {
+        return { text: `ESCALATION — ${e.name} is 14 days out and not locked: ${gaps.join(', ')}. Close these before the window tightens.`, escalate: true }
+      }
+      return { text: `${e.name} 14-day check: BEO signed, deposit in, F&B minimum and staffing locked. Clean.`, escalate: false }
     }
+    case 'day_of': {
+      const poc = e.contact ? `, POC ${e.contact}` : ''
+      const min = e.fnb_minimum != null ? `, F&B min $${e.fnb_minimum}` : ''
+      return { text: `Tonight: ${e.name}, ${head}${min}${poc}. Brief the bar on timeline and the minimum before doors.`, escalate: false }
+    }
+    case '24_hour_recap':
+      return { text: `Recap due — ${e.name}: actuals vs F&B minimum, tip pool, and anything to carry into the next one.`, escalate: false }
+  }
+}
 
-    await recordMilestoneFired(event, matchedMilestone, msg)
-    fired.push({ eventId: event.id, title: event.title, milestone: matchedMilestone, sent: true })
+export async function runEventLifecycleSweep(opts: { today?: string } = {}) {
+  const today = opts.today ?? new Date().toISOString().slice(0, 10)
+  const supabase = getSupabaseClient()
+
+  if (!supabase) {
+    const summary = 'Event sweep ran with no Supabase config — no events source.'
+    await logJobRun({ job: 'event-lifecycle', status: 'noop', summary })
+    return { job: 'event-lifecycle', status: 'noop', summary, fired: [] }
   }
 
-  return {
+  const { data: events } = await supabase
+    .from('events')
+    .select('event_key, name, event_date, headcount, contact, beo_signed, deposit_collected, fnb_minimum, staffing_locked')
+    .neq('status', 'cancelled')
+  const { data: runs } = await supabase.from('event_runs').select('event_key, phase')
+
+  const firedKeys = new Set((runs ?? []).map((r) => `${r.event_key}:${r.phase}`))
+  const fired: Array<{ name: string; phase: EventPhase; escalate: boolean }> = []
+  const nowIso = new Date().toISOString()
+
+  for (const e of (events ?? []) as EventRow[]) {
+    const phase = eventPhase(e.event_date, today)
+    if (!phase) continue
+    if (firedKeys.has(`${e.event_key}:${phase}`)) continue
+
+    const { text, escalate } = eventLine(e, phase)
+    await notifyOwner({ text, smsTo: escalate ? undefined : null })
+    if (escalate) await enqueueApproval({ action: 'escalation', summary: text, payload: { event: e.event_key, phase } })
+
+    await supabase.from('event_runs').insert({
+      event_key: e.event_key,
+      phase,
+      status: escalate ? 'escalated' : 'sent',
+      payload_json: { text },
+      sent_at: nowIso,
+      escalated_at: escalate ? nowIso : null,
+    })
+    fired.push({ name: e.name, phase, escalate })
+  }
+
+  const summary = fired.length
+    ? `Fired ${fired.length} event milestone(s): ${fired.map((f) => `${f.name} [${f.phase}]`).join(', ')}.`
+    : 'Event sweep clean — no milestones land today.'
+  await logJobRun({
     job: 'event-lifecycle',
-    status: fired.length > 0 ? 'alerts_sent' : 'clear',
-    eventCount: events.length,
-    milestoneFired: fired.length,
-    alerts: fired,
-    summary:
-      fired.length === 0
-        ? `${events.length} upcoming events scanned — no milestones due today.`
-        : `${fired.length} event milestone alert${fired.length === 1 ? '' : 's'} sent.`,
-  }
-}
-
-async function checkMilestoneFired(eventId: string, milestone: number): Promise<boolean> {
-  const supabase = getSupabaseClient()
-  if (!supabase) return false
-  const { data } = await supabase
-    .from('event_milestones')
-    .select('id')
-    .eq('event_id', eventId)
-    .eq('milestone_days', milestone)
-    .limit(1)
-    .single()
-  return !!data
-}
-
-async function recordMilestoneFired(event: CalendarEvent, milestone: number, msg: string) {
-  const supabase = getSupabaseClient()
-  if (!supabase) return
-  await supabase.from('event_milestones').insert({
-    event_id: event.id,
-    event_title: event.title,
-    event_date: event.start.slice(0, 10),
-    milestone_days: milestone,
-    alert_text: msg,
-    fired_at: new Date().toISOString(),
+    status: fired.length ? 'sent' : 'noop',
+    summary,
+    payload: { fired },
+    escalated: fired.some((f) => f.escalate),
   })
-}
 
-function todayISO(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Louisville' })
-}
-
-function daysBetween(from: string, to: string): number {
-  const a = new Date(from + 'T12:00:00').getTime()
-  const b = new Date(to + 'T12:00:00').getTime()
-  return Math.round((b - a) / 86_400_000)
+  return { job: 'event-lifecycle', status: fired.length ? 'sent' : 'clean', summary, fired }
 }

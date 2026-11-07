@@ -6,16 +6,16 @@
 //   3. Ask Claude to write the operator-voice paragraph + 2-3 numbered moves.
 //   4. Gate through assertPnlVoice — bad output is replaced with the
 //      deterministic mock fallback.
-//   5. Dispatch: SMS to OWNER_PHONE via Twilio, post to SLACK_OPS_CHANNEL.
-//   6. Persist to weekly_pnl_snapshots in Supabase.
+//   5. Dispatch via notifyOwner: SMS to OWNER_PHONE, post to SLACK_OPS_CHANNEL.
+//   6. Persist to weekly_pnl_snapshots + a job_runs heartbeat row.
 
 import { getWeeklyPnl } from '@/lib/integrations/quickbooks'
 import { getLastNightToastDigest } from '@/lib/integrations/toast'
 import { writePnlParagraph, assertPnlVoice, type PnlInputForWriter } from '@/lib/gm/pnlWriter'
-import { sendSms } from '@/lib/integrations/twilio'
-import { postSlackMessage } from '@/lib/integrations/slack'
 import { getSupabaseClient } from '@/lib/integrations/supabase'
 import { ESCALATION_THRESHOLDS } from '@/lib/policies/escalation'
+import { notifyOwner, type NotifyResult } from '@/lib/gm/notify'
+import { logJobRun } from '@/lib/gm/jobLog'
 
 const DEFAULT_TARGETS = {
   primeCostPct: 55,
@@ -24,8 +24,20 @@ const DEFAULT_TARGETS = {
   bevCostPct: 20,
 }
 
-export async function runPnlSnapshot() {
-  const qbo = await getWeeklyPnl()
+/** Pure: week-over-week percentage change, guarding divide-by-zero. */
+export function wowDeltaPct(current: number, prior: number): number {
+  if (prior <= 0) return 0
+  return Number((((current - prior) / prior) * 100).toFixed(1))
+}
+
+/** Pure: labor as a percentage of sales. */
+export function laborPct(laborCost: number | null, sales: number): number | null {
+  if (laborCost == null || sales <= 0) return null
+  return Number(((laborCost / sales) * 100).toFixed(1))
+}
+
+export async function runPnlSnapshot(opts: { weekEnding?: string } = {}) {
+  const qbo = await getWeeklyPnl(opts.weekEnding)
 
   // Use Toast as a sales cross-check. The shiftDigest pull is a single-day
   // function; for week totals we'd add a true weekly Toast fetch later. For now
@@ -68,43 +80,49 @@ export async function runPnlSnapshot() {
   const voice = assertPnlVoice(paragraph)
   if (!voice.ok) {
     console.warn('[pnl-snapshot] voice rules failed, regenerating with mock writer', voice.reasons)
+    const prev = process.env.PNL_DRY_RUN
     process.env.PNL_DRY_RUN = '1'
     paragraph = await writePnlParagraph(input)
-    delete process.env.PNL_DRY_RUN
+    if (prev === undefined) delete process.env.PNL_DRY_RUN
+    else process.env.PNL_DRY_RUN = prev
   }
 
-  const ownerPhone = process.env.OWNER_PHONE
-  const opsChannel = process.env.SLACK_OPS_CHANNEL ?? '#one-fourteen-ops'
-
-  const [smsResult, slackResult] = await Promise.all([
-    ownerPhone ? sendSms(ownerPhone, paragraph) : Promise.resolve({ ok: false, provider: 'stub', error: 'no_owner_phone' } as const),
-    postSlackMessage(opsChannel, paragraph),
-  ])
+  const dispatch = await notifyOwner({ text: paragraph })
 
   // Optional escalation: if prime cost crosses the escalation threshold, surface
   // an additional alert. ESCALATION_THRESHOLDS is the source of truth.
+  let escalated = false
   if (qbo.primeCostPct !== null && qbo.primeCostPct > (ESCALATION_THRESHOLDS.primeCostAlertPct ?? 65)) {
     const alert = `Prime cost alert: ${qbo.primeCostPct}% this week is over the ${ESCALATION_THRESHOLDS.primeCostAlertPct ?? 65}% escalation threshold.`
-    if (ownerPhone) await sendSms(ownerPhone, alert).catch(() => null)
-    await postSlackMessage(opsChannel, alert).catch(() => null)
+    await notifyOwner({ text: alert }).catch(() => null)
+    escalated = true
   }
 
   await persist({
     weekEnding: qbo.weekEnd,
     summary: paragraph,
     payload: { qbo, toast: toastTotals ?? null, input },
-    smsResult,
-    slackResult,
+    dispatch,
+  })
+
+  const status = qbo.source === 'qbo_live' ? 'ready' : 'fallback'
+  await logJobRun({
+    job: 'pnl-snapshot',
+    status,
+    summary: paragraph,
+    payload: { source: qbo.source, flags: qbo.flags, dispatch },
+    escalated,
   })
 
   return {
     job: 'pnl-snapshot',
-    status: qbo.source === 'qbo_live' ? 'ready' : 'fallback',
+    status,
     voiceOk: voice.ok,
     voiceReasons: voice.reasons,
     summary: paragraph,
-    sms: smsResult,
-    slack: slackResult,
+    sms: dispatch.sms,
+    slack: dispatch.slack,
+    rede: dispatch.rede,
     payload: { qbo, toast: toastTotals ?? null },
   }
 }
@@ -113,8 +131,7 @@ async function persist(opts: {
   weekEnding: string
   summary: string
   payload: unknown
-  smsResult: { ok: boolean; provider: string; error?: string }
-  slackResult: { ok: boolean; provider: string; error?: string }
+  dispatch: NotifyResult
 }) {
   const supabase = getSupabaseClient()
   if (!supabase) return
@@ -123,6 +140,6 @@ async function persist(opts: {
     week_ending: opts.weekEnding,
     summary_text: opts.summary,
     payload_json: opts.payload as Record<string, unknown>,
-    sent_at: (opts.smsResult.ok || opts.slackResult.ok) ? now : null,
+    sent_at: (opts.dispatch.sms.ok || opts.dispatch.slack.ok) ? now : null,
   })
 }
