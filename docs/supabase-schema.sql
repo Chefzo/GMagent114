@@ -92,3 +92,14 @@ CREATE TABLE IF NOT EXISTS event_milestones (
 );
 CREATE UNIQUE INDEX ON event_milestones (event_id, milestone_days);
 CREATE INDEX ON event_milestones (event_date DESC);
+
+-- ── Lock every table to the public API keys ──────────────────────────────
+-- The jobs only reach Supabase from the server with the service-role key,
+-- which skips these locks, so no policies are needed.
+ALTER TABLE shift_digests        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE weekly_pnl_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pre_shift_briefs     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deposit_records      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deposit_recons       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE permit_items         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_milestones     ENABLE ROW LEVEL SECURITY;

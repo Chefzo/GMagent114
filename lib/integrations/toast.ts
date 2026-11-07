@@ -92,13 +92,25 @@ async function toastAuth() {
   return res.body?.token?.accessToken || null
 }
 
+// The venue's UTC offset (Eastern time) on a calendar date: "-0400" in summer,
+// "-0500" in winter. Taken at noon: the business day starts at 5am, always
+// after the 2am daylight-saving switch.
+function venueUtcOffset(date: string) {
+  const name = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'longOffset' })
+    .formatToParts(new Date(`${date}T12:00:00Z`))
+    .find((part) => part.type === 'timeZoneName')?.value ?? ''
+  const match = name.match(/GMT([+-])(\d{2}):(\d{2})/)
+  return match ? `${match[1]}${match[2]}${match[3]}` : '-0500'
+}
+
 async function getOrdersForDate(token: string, date: string) {
   const config = getToastConfig()
-  const start = `${date}T05:00:00.000-0400`
+  // Business day = 5am to 5am venue time, EDT or EST as the date requires.
+  const start = `${date}T05:00:00.000${venueUtcOffset(date)}`
   const nextDate = new Date(`${date}T12:00:00Z`)
   nextDate.setUTCDate(nextDate.getUTCDate() + 1)
   const nextDateIso = nextDate.toISOString().slice(0, 10)
-  const end = `${nextDateIso}T05:00:00.000-0400`
+  const end = `${nextDateIso}T05:00:00.000${venueUtcOffset(nextDateIso)}`
 
   const all: Array<Record<string, unknown>> = []
   let page = 1

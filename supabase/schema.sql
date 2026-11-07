@@ -67,3 +67,14 @@ create table if not exists event_runs (
   escalated_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+-- Lock every table to the public API keys. The app only talks to Supabase from
+-- the server with the service-role key, which skips these locks, so no
+-- policies are needed.
+alter table gm_config enable row level security;
+alter table shift_digests enable row level security;
+alter table pre_shift_briefs enable row level security;
+alter table deposit_reconciliations enable row level security;
+alter table weekly_pnl_snapshots enable row level security;
+alter table permits_licenses enable row level security;
+alter table event_runs enable row level security;
