@@ -141,3 +141,19 @@ create table if not exists job_runs (
 alter table deposit_reconciliations add column if not exists toast_cash_total numeric(10,2);
 alter table deposit_reconciliations add column if not exists expected_card_total numeric(10,2);
 alter table deposit_reconciliations add column if not exists actual_cash_reported numeric(10,2);
+
+-- Lock every table to the public API keys. The app only talks to Supabase from
+-- the server with the service-role key, which skips these locks, so no
+-- policies are needed.
+alter table gm_config enable row level security;
+alter table shift_digests enable row level security;
+alter table pre_shift_briefs enable row level security;
+alter table deposit_reconciliations enable row level security;
+alter table weekly_pnl_snapshots enable row level security;
+alter table permits_licenses enable row level security;
+alter table event_runs enable row level security;
+alter table staff_contacts enable row level security;
+alter table events enable row level security;
+alter table permit_reminders enable row level security;
+alter table approval_queue enable row level security;
+alter table job_runs enable row level security;

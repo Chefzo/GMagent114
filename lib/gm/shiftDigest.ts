@@ -13,7 +13,7 @@
 // GET/POST to /api/gm/shift-digest with the cron secret.
 
 import { getLastNightToastDigest } from '@/lib/integrations/toast'
-import { writeDigestParagraph, assertVoiceRules } from '@/lib/gm/digestWriter'
+import { writeDigestParagraph, assertVoiceRules, pullFailedParagraph } from '@/lib/gm/digestWriter'
 import { getSupabaseClient } from '@/lib/integrations/supabase'
 import { notifyOwner, type NotifyResult } from '@/lib/gm/notify'
 import { renderRundownHtml } from '@/lib/gm/redeBrief'
@@ -21,10 +21,11 @@ import { logJobRun } from '@/lib/gm/jobLog'
 
 export async function runShiftDigest() {
   const digest = await getLastNightToastDigest()
+  const live = digest.source === 'toast_live'
 
-  let paragraph = await writeDigestParagraph(digest)
+  let paragraph = live ? await writeDigestParagraph(digest) : pullFailedParagraph(digest.businessDate)
   const voice = assertVoiceRules(paragraph)
-  if (!voice.ok) {
+  if (live && !voice.ok) {
     console.warn('[shift-digest] paragraph failed voice rules, using mock fallback', voice.reasons)
     // Deterministic mock never fails the gate, so a bad model output can't ship.
     const prev = process.env.DIGEST_DRY_RUN
@@ -42,7 +43,7 @@ export async function runShiftDigest() {
 
   await persist({ businessDate: digest.businessDate, summary: paragraph, payload: digest, dispatch })
 
-  const status = digest.source === 'toast_live' ? 'ready' : 'fallback'
+  const status = live ? 'ready' : 'fallback'
   await logJobRun({ job: 'shift-digest', status, summary: paragraph, payload: { source: digest.source, dispatch } })
 
   return {

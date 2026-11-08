@@ -8,8 +8,12 @@ import { NextRequest, NextResponse } from 'next/server'
 export function checkCronAuth(req: NextRequest): NextResponse | null {
   const secret = process.env.CRON_SECRET
   if (!secret) {
-    // No secret configured = open. Acceptable only on preview deploys without
-    // real Twilio/Slack credentials.
+    // No secret configured = open, but only off production: preview deploys
+    // and local dev without real Twilio/Slack credentials. Production refuses
+    // every request until CRON_SECRET is set.
+    if (process.env.VERCEL_ENV === 'production') {
+      return NextResponse.json({ ok: false, error: 'CRON_SECRET not set' }, { status: 503 })
+    }
     return null
   }
   const header = req.headers.get('authorization') ?? ''

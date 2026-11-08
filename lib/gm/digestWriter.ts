@@ -63,6 +63,13 @@ export async function writeDigestParagraph(metrics: DigestMetrics): Promise<stri
   return text ?? mockParagraph(metrics)
 }
 
+// Sent instead of a digest when Toast returned nothing: a zero-filled night
+// would otherwise read as a quiet night with "Nothing to chase".
+export function pullFailedParagraph(businessDate: string): string {
+  const dow = safeDayOfWeek(businessDate)
+  return `No Toast numbers for ${dow} (${businessDate}): the pull failed, so net sales and covers are unknown. Check the Toast close-out before trusting tonight's read.`
+}
+
 function mockParagraph(metrics: DigestMetrics): string {
   const covers = metrics.totalGuests ?? 0
   const net = metrics.netSales ?? 0

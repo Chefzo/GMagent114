@@ -36,7 +36,7 @@ function pickFirst(...values: Array<string | undefined | null>) {
   return null
 }
 
-function getToastConfig(): ToastConfig {
+export function getToastConfig(): ToastConfig {
   // Env vars only. Never hardcode credentials — every secret comes from Vercel
   // env config (TOAST_CLIENT_ID, TOAST_CLIENT_SECRET, TOAST_RESTAURANT_GUID).
   const clientId = pickFirst(process.env.TOAST_CLIENT_ID)
@@ -50,7 +50,7 @@ function getToastConfig(): ToastConfig {
   }
 }
 
-function httpsReq<T = unknown>(opts: https.RequestOptions, body?: string): Promise<{ status: number | undefined; body: T }> {
+export function httpsReq<T = unknown>(opts: https.RequestOptions, body?: string): Promise<{ status: number | undefined; body: T }> {
   return new Promise((resolve, reject) => {
     const req = https.request(opts, (resp) => {
       let data = ''
@@ -69,7 +69,9 @@ function httpsReq<T = unknown>(opts: https.RequestOptions, body?: string): Promi
   })
 }
 
-async function toastAuth() {
+// Null when no secret is configured. Otherwise the token (null if Toast refused
+// the login), the scopes Toast reports for it, and the HTTP status.
+export async function toastLogin() {
   const config = getToastConfig()
   if (!config.clientSecret) return null
 
@@ -79,7 +81,7 @@ async function toastAuth() {
     userAccessType: 'TOAST_MACHINE_CLIENT',
   })
 
-  const res = await httpsReq<{ token?: { accessToken?: string } }>({
+  const res = await httpsReq<{ token?: { accessToken?: string; scope?: string | null } }>({
     hostname: 'ws-api.toasttab.com',
     path: '/authentication/v1/authentication/login',
     method: 'POST',
@@ -89,16 +91,41 @@ async function toastAuth() {
     },
   }, body)
 
-  return res.body?.token?.accessToken || null
+  return {
+    accessToken: res.body?.token?.accessToken || null,
+    scope: res.body?.token?.scope || null,
+    status: res.status,
+  }
+}
+
+async function toastAuth() {
+  return (await toastLogin())?.accessToken || null
+}
+
+// The venue's UTC offset (Eastern time) on a calendar date: "-0400" in summer,
+// "-0500" in winter. Taken at noon: the business day starts at 5am, always
+// after the 2am daylight-saving switch.
+function venueUtcOffset(date: string) {
+  const name = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'longOffset' })
+    .formatToParts(new Date(`${date}T12:00:00Z`))
+    .find((part) => part.type === 'timeZoneName')?.value ?? ''
+  const match = name.match(/GMT([+-])(\d{2}):(\d{2})/)
+  return match ? `${match[1]}${match[2]}${match[3]}` : '-0500'
+}
+
+// Business day = 5am to 5am venue time, EDT or EST as the date requires.
+export function businessDayWindow(date: string) {
+  const start = `${date}T05:00:00.000${venueUtcOffset(date)}`
+  const nextDate = new Date(`${date}T12:00:00Z`)
+  nextDate.setUTCDate(nextDate.getUTCDate() + 1)
+  const nextDateIso = nextDate.toISOString().slice(0, 10)
+  const end = `${nextDateIso}T05:00:00.000${venueUtcOffset(nextDateIso)}`
+  return { start, end }
 }
 
 async function getOrdersForDate(token: string, date: string) {
   const config = getToastConfig()
-  const start = `${date}T05:00:00.000-0400`
-  const nextDate = new Date(`${date}T12:00:00Z`)
-  nextDate.setUTCDate(nextDate.getUTCDate() + 1)
-  const nextDateIso = nextDate.toISOString().slice(0, 10)
-  const end = `${nextDateIso}T05:00:00.000-0400`
+  const { start, end } = businessDayWindow(date)
 
   const all: Array<Record<string, unknown>> = []
   let page = 1
@@ -125,6 +152,11 @@ async function getOrdersForDate(token: string, date: string) {
 
 function numberOrZero(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function sumDiscounts(applied: unknown) {
+  if (!Array.isArray(applied)) return 0
+  return applied.reduce((sum: number, discount) => sum + numberOrZero((discount as Record<string, unknown> | null)?.discountAmount), 0)
 }
 
 // The venue runs on Eastern time; a business "night" spans 5am–5am. Toast
@@ -189,7 +221,7 @@ function summarizeLabor(entries: Array<Record<string, unknown>>) {
   }
 }
 
-function summarizeOrders(orders: Array<Record<string, unknown>>) {
+export function summarizeOrders(orders: Array<Record<string, unknown>>) {
   let netSales = 0
   let totalOrders = 0
   let totalGuests = 0
@@ -202,18 +234,24 @@ function summarizeOrders(orders: Array<Record<string, unknown>>) {
   const hourlyBuckets = { before10pm: 0, tenTo12am: 0, after12am: 0 }
 
   for (const order of orders) {
-    if (order.voided || order.deleted) continue
+    if (order.deleted) continue
     const checks = Array.isArray(order.checks) ? order.checks as Array<Record<string, unknown>> : []
     for (const check of checks) {
-      if (check.voided || check.deleted) continue
+      if (check.deleted) continue
+      // A voided check counts toward voids, not sales.
+      if (order.voided || check.voided) {
+        voidAmount += numberOrZero(check.totalAmount)
+        continue
+      }
       totalOrders += 1
       netSales += numberOrZero(check.amount)
-      totalGuests += Math.max(1, numberOrZero(check.customerCount))
-      voidAmount += numberOrZero(check.voidAmount)
-      discountAmount += numberOrZero(check.appliedDiscountsAmount)
+      totalGuests += Math.max(1, numberOrZero(check.numberOfGuests))
+      discountAmount += sumDiscounts(check.appliedDiscounts)
 
       const payments = Array.isArray(check.payments) ? check.payments as Array<Record<string, unknown>> : []
       for (const payment of payments) {
+        // A voided payment (declined card, cash refunded at the register) took no money.
+        if (payment.paymentStatus === 'VOIDED' || payment.voidInfo) continue
         const amount = numberOrZero(payment.amount)
         const tender = (payment.tender && typeof payment.tender === 'object') ? payment.tender as Record<string, unknown> : null
         const type = String(payment.type || tender?.type || '').toUpperCase()
@@ -234,10 +272,15 @@ function summarizeOrders(orders: Array<Record<string, unknown>>) {
 
       const selections = Array.isArray(check.selections) ? check.selections as Array<Record<string, unknown>> : []
       for (const selection of selections) {
-        if (selection.voided) continue
+        if (selection.voided) {
+          voidAmount += numberOrZero(selection.price)
+          continue
+        }
+        discountAmount += sumDiscounts(selection.appliedDiscounts)
         const name = String(selection.displayName || selection.name || 'Unknown item')
         const qty = numberOrZero(selection.quantity) || 1
-        const sales = (numberOrZero(selection.price) * qty)
+        // price is already the line total, quantity included.
+        const sales = numberOrZero(selection.price)
         const existing = itemMap.get(name) || { name, qty: 0, sales: 0 }
         existing.qty += qty
         existing.sales += sales

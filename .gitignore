@@ -10,3 +10,12 @@ pnpm-debug.log*
 tsconfig.tsbuildinfo
 yarn-debug.log*
 yarn-error.log*
+.vercel
+
+.vercel-deploy.local
+.vercel-deploy.log
+
+# Local helper scripts that handle secrets and tokens
+add-secrets*.ps1
+capture-vercel-token.ps1
+check-sms*.ps1
